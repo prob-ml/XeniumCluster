@@ -3,7 +3,9 @@ import anndata as ad
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import os
 
+from utils.embeddings import *
 from typing import List
 
 class XeniumCluster:
@@ -13,6 +15,7 @@ class XeniumCluster:
     # create a metric that performs cluster assignment comparison 
 
     SPOT_SIZE = 100
+    THIRD_DIM = False
 
     def __init__(self, data: pd.DataFrame, dataset_name: str) -> None:
         
@@ -36,7 +39,7 @@ class XeniumCluster:
 
     def convert_pd_to_ad(self, data):
 
-        return sc.AnnData(data)
+        return sc.AnnData(X=data.values, obs=data.index.to_frame(), var=pd.DataFrame(index=data.columns))
     
     def normalize_counts(self, data):
 
@@ -85,43 +88,13 @@ class XeniumCluster:
 
         self.xenium_spot_data = self.convert_pd_to_ad(self.xenium_spot_data)
 
-    def generate_neighborhood_graph(self, data: ad.AnnData, plot_pcas=True):
+    def generate_neighborhood_graph(self, data: ad.AnnData, n_neighbors=15, n_pcs=20, plot_pcas=True):
         
         # generate the neigborhood graph based on pca
         sc.tl.pca(data, svd_solver='arpack')
         if plot_pcas:
             sc.pl.pca_variance_ratio(data, log=True)
-        sc.pp.neighbors(data, n_neighbors=15, n_pcs=20)
-        
-    def get_embedding(
-            data: ad.AnnData,
-            embedding: str = "umap",
-            **kwargs
-        ):
-    
-        if embedding == "umap":
-            sc.tl.umap(data, min_dist=0.1)
-        elif embedding == "tsne":
-            sc.tl.tsne(data, **kwargs)
-        elif embedding == "pca":
-            sc.tl.pca(data, **kwargs)
-        elif embedding == "diffmap":
-            sc.tl.diffmap(data, **kwargs)
-
-    def plot_embedding(
-        data: ad.AnnData,
-        embedding: str = "umap",
-        **kwargs
-    ):
-        
-        if embedding == "umap":
-            sc.pl.umap(data, min_dist=0.1)
-        elif embedding == "tsne":
-            sc.pl.tsne(data, **kwargs)
-        elif embedding == "pca":
-            sc.pl.pca(data, **kwargs)
-        elif embedding == "diffmap":
-            sc.pl.diffmap(data, **kwargs)
+        sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
 
     def BayesSpace(data: ad.AnnData):
         pass
@@ -137,22 +110,31 @@ class XeniumCluster:
 
         for resolution in resolutions:
 
-            sc.tl.leiden(data, resolution=resolution, key_added=f'leiden_{resolution}')
-            print(f"Cluster with resolutions {resolution}", data.obs[f'leiden_{resolution}'], sep=" ")
+            key_added = f'leiden_{resolution}'
+
+            sc.tl.leiden(data, resolution=resolution, key_added=key_added)
+            print(f"Cluster with resolutions {resolution}", data.obs[key_added], sep=" ")
 
             # calculate embedding
-            self.get_embedding(data, embedding, **kwargs)
+            get_embedding(data, embedding, **kwargs)
 
             # plot embedding
-            self.plot_embedding(data, embedding, **kwargs)
+            plot_embedding(data, key_added, embedding, **kwargs)
 
             # save plot
             if save_plot:
-                plt.savefig(f'results/{self.dataset_name}/Leiden/{embedding}_{resolution}.png')
+                # Directory where you want to save the file
+                directory = f"results/{self.dataset_name}/Leiden/"
+
+                # Use os.makedirs to create the directory if it does not exist
+                os.makedirs(directory, exist_ok=True)
+
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
+
 
         return {resolution: data.obs[f'leiden_{resolution}'] for resolution in resolutions}
 
-    def Louvian(
+    def Louvain(
             self,
             data: ad.AnnData,
             resolutions: List[float],
@@ -163,44 +145,60 @@ class XeniumCluster:
 
         for resolution in resolutions:
 
-            sc.tl.louvain(data, resolution=resolution, key_added=f'louvain_{resolution}')
+            key_added = f'louvain_{resolution}'
+
+            sc.tl.louvain(data, resolution=resolution, key_added=key_added)
 
             # calculate embedding
-            self.get_embedding(data, embedding, **kwargs)
+            get_embedding(data, embedding, **kwargs)
 
             # plot embedding
-            self.plot_embedding(data, embedding, **kwargs)
+            plot_embedding(data, key_added, embedding, **kwargs)
 
             # save plot
             if save_plot:
-                plt.savefig(f'results/{self.dataset_name}/Louvain/{embedding}_{resolution}.png')
+                # Directory where you want to save the file
+                directory = f"results/{self.dataset_name}/Louvain/"
+
+                # Use os.makedirs to create the directory if it does not exist
+                os.makedirs(directory, exist_ok=True)
+
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
 
         return {resolution: data.obs[f'louvain_{resolution}'] for resolution in resolutions}
 
     def Hierarchical(
             self,
             data: ad.AnnData,
+            groupby: List[str],
             save_plot: bool = False,
             embedding: str = "umap",
             **kwargs
         ):
+
+        key_added = key_added=f'dendrogram'
         
         # calculate embedding
-        sc.tl.dendrogram(data, key_added=f'dendrogram')
+        sc.tl.dendrogram(data, key_added=key_added)
 
         # plot dendrogram
         sc.pl.dendrogram(data)
 
         # calculate embedding
-        self.get_embedding(data, embedding, **kwargs)
+        get_embedding(data, embedding, **kwargs)
 
         # plot embedding
-        self.plot_embedding(data, embedding, **kwargs)
+        plot_embedding(data, key_added, embedding, **kwargs)
 
         # save plot
         if save_plot:
-            plt.savefig(f'results/{self.dataset_name}/hierarchical/{embedding}.png')
+
+            # Directory where you want to save the file
+            directory = f"results/{self.dataset_name}/hierarchical/"
+
+            # Use os.makedirs to create the directory if it does not exist
+            os.makedirs(directory, exist_ok=True)
+
+            plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_Z={self.THIRD_DIM}.png')
 
         return data.obs['dendrogram']
-
-
