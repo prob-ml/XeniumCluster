@@ -39,7 +39,9 @@ class XeniumCluster:
 
     def convert_pd_to_ad(self, data):
 
-        return sc.AnnData(X=data.values, obs=data.index.to_frame(), var=pd.DataFrame(index=data.columns))
+        obs_df = data.index.to_frame(index=False).astype("category")
+
+        return sc.AnnData(X=data.values, obs=obs_df, var=pd.DataFrame(index=data.columns))
     
     def normalize_counts(self, data):
 
@@ -86,6 +88,8 @@ class XeniumCluster:
         if save_data:
             self.xenium_spot_data.to_csv(self.spot_data_location)
 
+        self.xenium_spot_data.set_index(["spot_number", "x_location", "y_location", "z_location"], inplace=True)
+
         self.xenium_spot_data = self.convert_pd_to_ad(self.xenium_spot_data)
 
     def generate_neighborhood_graph(self, data: ad.AnnData, n_neighbors=15, n_pcs=20, plot_pcas=True):
@@ -113,7 +117,6 @@ class XeniumCluster:
             key_added = f'leiden_{resolution}'
 
             sc.tl.leiden(data, resolution=resolution, key_added=key_added)
-            print(f"Cluster with resolutions {resolution}", data.obs[key_added], sep=" ")
 
             # calculate embedding
             get_embedding(data, embedding, **kwargs)
@@ -170,19 +173,21 @@ class XeniumCluster:
     def Hierarchical(
             self,
             data: ad.AnnData,
-            groupby: List[str],
+            groupby: List[str] = ["spot_number"],
             save_plot: bool = False,
             embedding: str = "umap",
             **kwargs
         ):
 
-        key_added = key_added=f'dendrogram'
+        key_added = f'dendrogram_{groupby}'
         
         # calculate embedding
-        sc.tl.dendrogram(data, key_added=key_added)
+        sc.tl.dendrogram(data, groupby=groupby, key_added=key_added)
+
+        data.obs[key_added] = data.uns[key_added]
 
         # plot dendrogram
-        sc.pl.dendrogram(data)
+        # sc.pl.dendrogram(data, groupby=groupby)
 
         # calculate embedding
         get_embedding(data, embedding, **kwargs)
@@ -201,4 +206,4 @@ class XeniumCluster:
 
             plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_Z={self.THIRD_DIM}.png')
 
-        return data.obs['dendrogram']
+        return data.obs[key_added]
