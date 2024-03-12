@@ -1,22 +1,27 @@
-# Install devtools, if necessary
-if (!requireNamespace("devtools", quietly = TRUE))
-    install.packages("devtools")
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
 
-devtools::install_github("edward130603/BayesSpace")
+BiocManager::install("BayesSpace")
 
 library(SingleCellExperiment)
 library(ggplot2)
 library(BayesSpace)
 library(Matrix)
 
-sce <- readVisium(".")
+# sce <- readVisium("data/hBreast")
 
-rowData <- read.csv("path/to/rowData.csv", stringsAsFactors=FALSE)
-colData <- read.csv("path/to/colData.csv", stringsAsFactors=FALSE, row.names=1)
-counts <- read.csv("path/to/counts.csv.gz",
-                   row.names=1, check.names=F, stringsAsFactors=FALSE)
+rowData <- read.csv("rowData.csv", stringsAsFactors=FALSE, row.names=1)
+colData <- read.csv("colData.csv", stringsAsFactors=FALSE, row.names=1)
+countsData <- read.csv("counts.csv", check.names=F, stringsAsFactors=FALSE)
 
-hBreast <- SingleCellExperiment(assays=list(counts=as(counts, "dgCMatrix")),
+# Create unique row names from the first column, then remove it from countsData
+rownames(countsData) <- make.unique(as.character(countsData[,1]))
+countsData <- countsData[,-1]
+
+countsMatrix <- as.matrix(countsData)
+countsSparse <- Matrix(countsMatrix, sparse = TRUE)
+
+hBreast <- SingleCellExperiment(assays=list(counts=as(countsSparse, "dgCMatrix")),
                             rowData=rowData,
                             colData=colData)
 

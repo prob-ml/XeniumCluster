@@ -1,4 +1,5 @@
 import scanpy as sc
+import scipy.cluster.hierarchy as sch
 import anndata as ad
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -66,9 +67,14 @@ class XeniumCluster:
         if third_dim:
             z_min, z_max = min(self.raw_xenium_data["z_location"]), max(self.raw_xenium_data["z_location"])
             z_values = np.arange(z_min - MIN_PAD, z_max + self.SPOT_SIZE, self.SPOT_SIZE)
-            self.xenium_spot_data["spot_number"] = (np.searchsorted(x_values, self.xenium_spot_data["x_location"]) - 1) * len(y_values) * len(z_values) + (np.searchsorted(y_values, self.xenium_spot_data["y_location"]) - 1) * len(z_values) + (np.searchsorted(y_values, self.xenium_spot_data["z_location"]) - 1)
+            self.xenium_spot_data["col"] = np.searchsorted(x_values, self.xenium_spot_data["x_location"]) - 1
+            self.xenium_spot_data["row"] = np.searchsorted(y_values, self.xenium_spot_data["y_location"]) - 1
+            self.xenium_spot_data["z-index"] = np.searchsorted(z_values, self.xenium_spot_data["z_location"]) - 1
+            self.xenium_spot_data["spot_number"] = (self.xenium_spot_data["col"] * len(y_values) * len(z_values)) + (self.xenium_spot_data["row"] * len(z_values)) + self.xenium_spot_data["z-index"]
         else:
-            self.xenium_spot_data["spot_number"] = (np.searchsorted(x_values, self.xenium_spot_data["x_location"]) - 1) * len(y_values) + (np.searchsorted(y_values, self.xenium_spot_data["y_location"]) - 1)
+            self.xenium_spot_data["col"] = np.searchsorted(x_values, self.xenium_spot_data["x_location"]) - 1
+            self.xenium_spot_data["row"] = np.searchsorted(y_values, self.xenium_spot_data["y_location"]) - 1
+            self.xenium_spot_data["spot_number"] = self.xenium_spot_data["col"] * len(y_values) + self.xenium_spot_data["row"]
 
         counts = self.xenium_spot_data.groupby(['spot_number', 'feature_name']).size().reset_index(name='count')
 
@@ -78,6 +84,8 @@ class XeniumCluster:
                                   fill_value=0)
         
         location_means = self.xenium_spot_data.groupby('spot_number').agg({
+            'row': 'mean',
+            'col': 'mean',
             'x_location': 'mean',
             'y_location': 'mean',
             'z_location': 'mean'
@@ -88,7 +96,7 @@ class XeniumCluster:
         if save_data:
             self.xenium_spot_data.to_csv(self.spot_data_location)
 
-        self.xenium_spot_data.set_index(["spot_number", "x_location", "y_location", "z_location"], inplace=True)
+        self.xenium_spot_data.set_index(["spot_number", "x_location", "y_location", "z_location", "row", "col"], inplace=True)
 
         self.xenium_spot_data = self.convert_pd_to_ad(self.xenium_spot_data)
 
@@ -181,10 +189,18 @@ class XeniumCluster:
 
         key_added = f'dendrogram_{groupby}'
         
-        # calculate embedding
+        # calculate cluster assignment
         sc.tl.dendrogram(data, groupby=groupby, key_added=key_added)
+        linkage_matrix = data.uns[key_added]['linkage']
 
-        data.obs[key_added] = data.uns[key_added]
+        # Decide on the number of clusters
+        num_clusters = 3  # Example: aiming for 3 clusters
+
+        # Form clusters from the dendrogram
+        cluster_labels = sch.fcluster(linkage_matrix, t=num_clusters, criterion='maxclust')
+
+        # Assign cluster labels to observations
+        data.obs[key_added] = cluster_labels
 
         # plot dendrogram
         # sc.pl.dendrogram(data, groupby=groupby)

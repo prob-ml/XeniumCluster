@@ -23,7 +23,7 @@ def plot_embedding(
         embedding: str = "umap",
         **kwargs # will make this something you can customize later
     ):
-    
+
     if embedding == "umap":
         sc.pl.umap(data,size=30,color=cluster_key,legend_loc='on data',legend_fontsize=3,legend_fontoutline=1,show=False,palette="rainbow")
     elif embedding == "tsne":
