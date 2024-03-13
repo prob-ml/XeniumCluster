@@ -10,26 +10,26 @@ library(Matrix)
 
 # sce <- readVisium("data/hBreast")
 
-rowData <- read.csv("rowData.csv", stringsAsFactors=FALSE, row.names=1)
-colData <- read.csv("colData.csv", stringsAsFactors=FALSE, row.names=1)
-countsData <- read.csv("counts.csv", check.names=F, stringsAsFactors=FALSE)
+rowData <- read.csv("../Downloads/rowData.csv", stringsAsFactors=FALSE, row.names=1)
+colData <- read.csv("../Downloads/colData.csv", stringsAsFactors=FALSE, row.names=1)
+countsData <- t(read.csv("../Downloads/counts.csv", row.names=1, check.names=F, stringsAsFactors=FALSE))
 
 # Create unique row names from the first column, then remove it from countsData
-rownames(countsData) <- make.unique(as.character(countsData[,1]))
-countsData <- countsData[,-1]
+rownames(countsData)<- rownames(rowData)
+colnames(countsData) <-rownames(colData)
 
-countsMatrix <- as.matrix(countsData)
-countsSparse <- Matrix(countsMatrix, sparse = TRUE)
-
-hBreast <- SingleCellExperiment(assays=list(counts=as(countsSparse, "dgCMatrix")),
+sce <- SingleCellExperiment(assays=list(counts=as(as.matrix(countsData), "dgCMatrix")),
                             rowData=rowData,
                             colData=colData)
 
+hBreast <- sce
+
 set.seed(102)
 hBreast <- spatialPreprocess(hBreast, platform="ST", 
-                              n.PCs=7, n.HVGs=2000, log.normalize=FALSE)
+                              n.PCs=7, n.HVGs=2000, log.normalize=TRUE)
 
-hBreast <- qTune(hBreast, qs=seq(2, 10), platform="ST", d=7)
+hBreast <- hBreast[, !grepl("^(BLANK_|NegControl)", colnames(hBreast))]
+hBreast <- qTune(hBreast, qs=seq(3, 7), platform="ST", d=7)
 qPlot(hBreast)
 
 set.seed(149)
