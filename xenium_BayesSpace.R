@@ -29,22 +29,19 @@ hBreast <- spatialPreprocess(hBreast, platform="ST",
                               n.PCs=7, n.HVGs=2000, log.normalize=TRUE)
 
 hBreast <- hBreast[, !grepl("^(BLANK_|NegControl)", colnames(hBreast))]
-hBreast <- qTune(hBreast, qs=seq(3, 7), platform="ST", d=7)
+hBreast <- qTune(hBreast, qs=seq(2, 15), platform="ST", d=7)
 qPlot(hBreast)
 
 set.seed(149)
-hBreast <- spatialCluster(hBreast, q=4, platform="ST", d=7,
-                           init.method="mclust", model="t", gamma=2,
-                           nrep=1000, burn.in=100,
-                           save.chain=TRUE)
-
-set.seed(149)
-hBreast <- spatialCluster(hBreast, q=4, platform="ST", d=7,
+q_optimal <- attr(hBreast, "q.logliks")[which.max(attr(hBreast, "q.logliks")$loglik),]$q
+hBreast <- spatialCluster(hBreast, q=q_optimal, platform="ST", d=7,
                            init.method="mclust", model="t", gamma=2,
                            nrep=1000, burn.in=100,
                            save.chain=TRUE)
 
 clusterPlot(hBreast)
+
+png('BayesSpace_hBreast.png')
 
 clusterPlot(hBreast, palette=c("purple", "red", "blue", "yellow"), color="black") +
   theme_bw() +
@@ -52,8 +49,10 @@ clusterPlot(hBreast, palette=c("purple", "red", "blue", "yellow"), color="black"
   ylab("Row") +
   labs(fill="BayesSpace\ncluster", title="Spatial clustering of ST_mel1_rep2")
 
-hBreast.enhanced <- spatialEnhance(hBreast, q=4, platform="ST", d=7,
-                                    model="t", gamma=2,
-                                    jitter_prior=0.3, jitter_scale=3.5,
-                                    nrep=1000, burn.in=100,
-                                    save.chain=TRUE)
+
+# png('BayesSpace_hBreast_ENHANCED.png')
+# hBreast.enhanced <- spatialEnhance(hBreast, q=4, platform="ST", d=7,
+#                                     model="t", gamma=2,
+#                                     jitter_prior=0.3, jitter_scale=3.5,
+#                                     nrep=1000, burn.in=100,
+#                                     save.chain=TRUE)
