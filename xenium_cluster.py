@@ -13,17 +13,17 @@ class XeniumCluster:
 
     # TO DO
     # add option to only include high variable genes
-    # create a metric that performs cluster assignment comparison 
 
     SPOT_SIZE = 100
     THIRD_DIM = False
 
-    def __init__(self, data: pd.DataFrame, dataset_name: str) -> None:
+    def __init__(self, data: pd.DataFrame, dataset_name: str, spot_size: int = 100) -> None:
         
         self.raw_xenium_data = data
         self.xenium_spot_data = None
         self.dataset_name = dataset_name
-        self.spot_data_location = f"data/spot_data/{dataset_name}/{dataset_name}_SPOTSIZE={self.SPOT_SIZE}um.csv"
+        self.SPOT_SIZE = spot_size
+        self.spot_data_location = f"data/spot_data/{dataset_name}"
 
     def set_spot_size(self, new_spot_size):
 
@@ -94,7 +94,7 @@ class XeniumCluster:
         self.xenium_spot_data = location_means.join(counts_pivot, on='spot_number')
 
         if save_data:
-            self.xenium_spot_data.to_csv(self.spot_data_location)
+            self.xenium_spot_data.to_csv(f"{self.spot_data_location}/{self.dataset_name}_SPOTSIZE={self.SPOT_SIZE}um_z={third_dim}.csv")
 
         self.xenium_spot_data.set_index(["spot_number", "x_location", "y_location", "z_location", "row", "col"], inplace=True)
 
@@ -108,8 +108,13 @@ class XeniumCluster:
             sc.pl.pca_variance_ratio(data, log=True)
         sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
 
-    def BayesSpace(data: ad.AnnData):
-        pass
+    def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, plot_highly_variable_genes: bool = False):
+        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
+        if plot_highly_variable_genes:
+            sc.pl.highly_variable_genes(data)
+
+    def pca(self, data: ad.AnnData, num_pcs: int):
+        sc.pp.pca(data, num_pcs)
 
     def Leiden(
             self,
@@ -130,7 +135,7 @@ class XeniumCluster:
             get_embedding(data, embedding, **kwargs)
 
             # plot embedding
-            plot_embedding(data, key_added, embedding, **kwargs)
+            _ = plot_embedding(data, key_added, embedding, **kwargs)
 
             # save plot
             if save_plot:
@@ -142,6 +147,26 @@ class XeniumCluster:
 
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
 
+                colors = [int(x) for x in data.obs[key_added]]
+
+                unique_clusters = np.unique(colors)
+
+                for cluster_id in unique_clusters:
+
+                    indices = np.where(colors == cluster_id)[0]
+        
+                    plt.scatter(
+                        self.xenium_spot_data.obs["x_location"].iloc[indices],
+                        self.xenium_spot_data.obs["y_location"].iloc[indices],
+                        s=2,
+                        label=f'Cluster {cluster_id}'
+                    )
+
+                plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
+                plt.xlabel("x_coord")
+                plt.ylabel("y_coord")
+                _ = plt.title(f"Leiden Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}_CLUSTERS.png', bbox_inches='tight')
 
         return {resolution: data.obs[f'leiden_{resolution}'] for resolution in resolutions}
 
@@ -164,7 +189,7 @@ class XeniumCluster:
             get_embedding(data, embedding, **kwargs)
 
             # plot embedding
-            plot_embedding(data, key_added, embedding, **kwargs)
+            _ = plot_embedding(data, key_added, embedding, **kwargs)
 
             # save plot
             if save_plot:
@@ -175,6 +200,27 @@ class XeniumCluster:
                 os.makedirs(directory, exist_ok=True)
 
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
+
+                colors = [int(x) for x in data.obs[key_added]]
+
+                unique_clusters = np.unique(colors)
+
+                for cluster_id in unique_clusters:
+
+                    indices = np.where(colors == cluster_id)[0]
+        
+                    plt.scatter(
+                        self.xenium_spot_data.obs["x_location"].iloc[indices],
+                        self.xenium_spot_data.obs["y_location"].iloc[indices],
+                        s=2,
+                        label=f'Cluster {cluster_id}'
+                    )
+
+                plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
+                plt.xlabel("x_coord")
+                plt.ylabel("y_coord")
+                _ = plt.title(f"Louvain Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}_CLUSTERS.png')
 
         return {resolution: data.obs[f'louvain_{resolution}'] for resolution in resolutions}
 
@@ -209,7 +255,7 @@ class XeniumCluster:
         get_embedding(data, embedding, **kwargs)
 
         # plot embedding
-        plot_embedding(data, key_added, embedding, **kwargs)
+        _ = plot_embedding(data, key_added, embedding, **kwargs)
 
         # save plot
         if save_plot:
@@ -221,5 +267,26 @@ class XeniumCluster:
             os.makedirs(directory, exist_ok=True)
 
             plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_Z={self.THIRD_DIM}.png')
+
+            colors = [int(x) for x in data.obs[key_added]]
+
+            unique_clusters = np.unique(colors)
+
+            for cluster_id in unique_clusters:
+
+                indices = np.where(colors == cluster_id)[0]
+    
+                plt.scatter(
+                    self.xenium_spot_data.obs["x_location"].iloc[indices],
+                    self.xenium_spot_data.obs["y_location"].iloc[indices],
+                    s=2,
+                    label=f'Cluster {cluster_id}'
+                )
+
+            plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
+            plt.xlabel("x_coord")
+            plt.ylabel("y_coord")
+            _ = plt.title(f"Hierarchical Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
+            plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png')
 
         return data.obs[key_added]

@@ -20,6 +20,11 @@ tqdm = "^4.66.1"
 mypy = "^1.8.0"
 python-louvain = "^0.16"
 louvain = "^0.8.1"
+tifffile = "^2024.2.12"
+imagecodecs = "^2024.1.1"
+torch = "^2.2.2"
+lightning = "^2.2.1"
+torchviz = "^0.0.2"
 
 
 [tool.poetry.group.dev.dependencies]
