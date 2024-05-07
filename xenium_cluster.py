@@ -108,8 +108,8 @@ class XeniumCluster:
             sc.pl.pca_variance_ratio(data, log=True)
         sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
 
-    def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, plot_highly_variable_genes: bool = False):
-        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
+    def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, plot_highly_variable_genes: bool=False, n_top_genes: int=None):
+        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp, n_top_genes=n_top_genes)
         if plot_highly_variable_genes:
             sc.pl.highly_variable_genes(data)
 
@@ -126,47 +126,50 @@ class XeniumCluster:
         ):
 
         for resolution in resolutions:
-
             key_added = f'leiden_{resolution}'
 
+            # Running the clustering algorithm
             sc.tl.leiden(data, resolution=resolution, key_added=key_added)
 
-            # calculate embedding
+            # Calculate and plot embedding
             get_embedding(data, embedding, **kwargs)
 
             # plot embedding
             _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-            # save plot
+            # Save plot if required
             if save_plot:
-                # Directory where you want to save the file
-                directory = f"results/{self.dataset_name}/Leiden/"
 
-                # Use os.makedirs to create the directory if it does not exist
-                os.makedirs(directory, exist_ok=True)
+                # Create the figure with specified size
+                fig, ax = plt.subplots(figsize=(12, 8))
 
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
-
+                # Plot data points
                 colors = [int(x) for x in data.obs[key_added]]
-
                 unique_clusters = np.unique(colors)
 
                 for cluster_id in unique_clusters:
-
                     indices = np.where(colors == cluster_id)[0]
-        
-                    plt.scatter(
-                        self.xenium_spot_data.obs["x_location"].iloc[indices],
-                        self.xenium_spot_data.obs["y_location"].iloc[indices],
-                        s=2,
+                    ax.scatter(
+                        data.obs["x_location"].iloc[indices],
+                        data.obs["y_location"].iloc[indices],
+                        s=9,  # Adjust spot size as necessary
                         label=f'Cluster {cluster_id}'
                     )
 
-                plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
-                plt.xlabel("x_coord")
-                plt.ylabel("y_coord")
-                _ = plt.title(f"Leiden Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}_CLUSTERS.png', bbox_inches='tight')
+                # Configure legend to fit the plot height
+                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+
+                # Set axis labels and title
+                ax.set_xlabel("x_coord")
+                ax.set_ylabel("y_coord")
+                ax.set_title(f"Leiden Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+
+                # Adjust layout to make space for the legend outside the plot
+                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+
+                directory = f"results/{self.dataset_name}/Leiden/"
+                os.makedirs(directory, exist_ok=True)
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
 
         return {resolution: data.obs[f'leiden_{resolution}'] for resolution in resolutions}
 
@@ -191,36 +194,39 @@ class XeniumCluster:
             # plot embedding
             _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-            # save plot
+            # Save plot if required
             if save_plot:
-                # Directory where you want to save the file
-                directory = f"results/{self.dataset_name}/Louvain/"
 
-                # Use os.makedirs to create the directory if it does not exist
-                os.makedirs(directory, exist_ok=True)
+                # Create the figure with specified size
+                fig, ax = plt.subplots(figsize=(12, 8))
 
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_{resolution}_Z={self.THIRD_DIM}.png')
-
+                # Plot data points
                 colors = [int(x) for x in data.obs[key_added]]
-
                 unique_clusters = np.unique(colors)
 
                 for cluster_id in unique_clusters:
-
                     indices = np.where(colors == cluster_id)[0]
-        
-                    plt.scatter(
-                        self.xenium_spot_data.obs["x_location"].iloc[indices],
-                        self.xenium_spot_data.obs["y_location"].iloc[indices],
-                        s=2,
+                    ax.scatter(
+                        data.obs["x_location"].iloc[indices],
+                        data.obs["y_location"].iloc[indices],
+                        s=9,  # Adjust spot size as necessary
                         label=f'Cluster {cluster_id}'
                     )
 
-                plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
-                plt.xlabel("x_coord")
-                plt.ylabel("y_coord")
-                _ = plt.title(f"Louvain Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}_CLUSTERS.png')
+                # Configure legend to fit the plot height
+                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+
+                # Set axis labels and title
+                ax.set_xlabel("x_coord")
+                ax.set_ylabel("y_coord")
+                ax.set_title(f"Louvain Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+
+                # Adjust layout to make space for the legend outside the plot
+                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+
+                directory = f"results/{self.dataset_name}/Louvain/"
+                os.makedirs(directory, exist_ok=True)
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
 
         return {resolution: data.obs[f'louvain_{resolution}'] for resolution in resolutions}
 
@@ -257,36 +263,38 @@ class XeniumCluster:
         # plot embedding
         _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-        # save plot
+        # Save plot if required
         if save_plot:
 
-            # Directory where you want to save the file
-            directory = f"results/{self.dataset_name}/hierarchical/"
+            # Create the figure with specified size
+            fig, ax = plt.subplots(figsize=(12, 8))
 
-            # Use os.makedirs to create the directory if it does not exist
-            os.makedirs(directory, exist_ok=True)
-
-            plt.savefig(f'{directory}{self.SPOT_SIZE}um_{embedding}_Z={self.THIRD_DIM}.png')
-
+            # Plot data points
             colors = [int(x) for x in data.obs[key_added]]
-
             unique_clusters = np.unique(colors)
 
             for cluster_id in unique_clusters:
-
                 indices = np.where(colors == cluster_id)[0]
-    
-                plt.scatter(
-                    self.xenium_spot_data.obs["x_location"].iloc[indices],
-                    self.xenium_spot_data.obs["y_location"].iloc[indices],
-                    s=2,
+                ax.scatter(
+                    data.obs["x_location"].iloc[indices],
+                    data.obs["y_location"].iloc[indices],
+                    s=9,  # Adjust spot size as necessary
                     label=f'Cluster {cluster_id}'
                 )
 
-            plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
-            plt.xlabel("x_coord")
-            plt.ylabel("y_coord")
-            _ = plt.title(f"Hierarchical Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
-            plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png')
+            # Configure legend to fit the plot height
+            ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+
+            # Set axis labels and title
+            ax.set_xlabel("x_coord")
+            ax.set_ylabel("y_coord")
+            ax.set_title(f"Hierarchical Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
+
+            # Adjust layout to make space for the legend outside the plot
+            plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+
+            directory = f"results/{self.dataset_name}/hierarchical/"
+            os.makedirs(directory, exist_ok=True)
+            plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
 
         return data.obs[key_added]
