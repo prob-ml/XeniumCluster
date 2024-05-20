@@ -109,7 +109,7 @@ class XeniumCluster:
         sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
 
     def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, plot_highly_variable_genes: bool=False, n_top_genes: int=None):
-        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp, n_top_genes=n_top_genes)
+        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp, n_top_genes=n_top_genes, flavor="seurat")
         if plot_highly_variable_genes:
             sc.pl.highly_variable_genes(data)
 

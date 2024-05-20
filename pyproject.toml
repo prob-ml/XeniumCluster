@@ -22,13 +22,15 @@ python-louvain = "^0.16"
 louvain = "^0.8.1"
 tifffile = "^2024.2.12"
 imagecodecs = "^2024.1.1"
-torch = "^2.2.2"
+torch = "^2.3.0"
 lightning = "^2.2.1"
 torchviz = "^0.0.2"
 optuna = "^3.6.1"
 tensorboard = "^2.16.2"
 pytorch-metric-learning = "^2.5.0"
 pyro-ppl = "^1.9.0"
+ipykernel = "^6.29.4"
+scikit-misc = "^0.3.1"
 
 
 [tool.poetry.group.dev.dependencies]
