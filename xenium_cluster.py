@@ -8,6 +8,9 @@ import os
 
 from utils.embeddings import *
 from typing import List
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 
 class XeniumCluster:
 
@@ -108,8 +111,8 @@ class XeniumCluster:
             sc.pl.pca_variance_ratio(data, log=True)
         sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
 
-    def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, plot_highly_variable_genes: bool=False, n_top_genes: int=None):
-        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp, n_top_genes=n_top_genes, flavor="seurat")
+    def filter_only_high_variable_genes(self, data: ad.AnnData, min_mean: float=0.3, max_mean: float=7, min_disp: float=-0.5, flavor="seurat", plot_highly_variable_genes: bool=False, n_top_genes: int=None):
+        sc.pp.highly_variable_genes(data, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp, n_top_genes=n_top_genes, flavor=flavor)
         if plot_highly_variable_genes:
             sc.pl.highly_variable_genes(data)
 
@@ -150,9 +153,8 @@ class XeniumCluster:
                 for cluster_id in unique_clusters:
                     indices = np.where(colors == cluster_id)[0]
                     ax.scatter(
-                        data.obs["x_location"].iloc[indices],
-                        data.obs["y_location"].iloc[indices],
-                        s=9,  # Adjust spot size as necessary
+                        data.obs["row"].iloc[indices],
+                        data.obs["col"].iloc[indices],
                         label=f'Cluster {cluster_id}'
                     )
 
@@ -207,9 +209,8 @@ class XeniumCluster:
                 for cluster_id in unique_clusters:
                     indices = np.where(colors == cluster_id)[0]
                     ax.scatter(
-                        data.obs["x_location"].iloc[indices],
-                        data.obs["y_location"].iloc[indices],
-                        s=9,  # Adjust spot size as necessary
+                        data.obs["row"].iloc[indices],
+                        data.obs["col"].iloc[indices],
                         label=f'Cluster {cluster_id}'
                     )
 
@@ -233,20 +234,36 @@ class XeniumCluster:
     def Hierarchical(
             self,
             data: ad.AnnData,
+            num_clusters: int = 3,
             groupby: List[str] = ["spot_number"],
             save_plot: bool = False,
             embedding: str = "umap",
+            include_spatial = True,
             **kwargs
         ):
 
         key_added = f'dendrogram_{groupby}'
         
         # calculate cluster assignment
-        sc.tl.dendrogram(data, groupby=groupby, key_added=key_added)
-        linkage_matrix = data.uns[key_added]['linkage']
+        if include_spatial:
+            # Normalize spatial coordinates to have a similar scale to the gene expression data
+            norm_row = (data.obs['row'].astype(int) - np.min(data.obs['row'].astype(int))) / np.ptp(data.obs['row'].astype(int))
+            norm_col = (data.obs['col'].astype(int) - np.min(data.obs['col'].astype(int))) / np.ptp(data.obs['col'].astype(int))
 
-        # Decide on the number of clusters
-        num_clusters = 3  # Example: aiming for 3 clusters
+            # Create a temporary copy of X and append normalized spatial coordinates
+            temp_X = np.concatenate([data.X, np.array(norm_row)[:, np.newaxis], np.array(norm_col)[:, np.newaxis]], axis=1)
+
+            # Now perform the clustering with the temporary X
+            var=data.var.copy()
+            var = pd.concat((var, pd.DataFrame(index=['norm_row', 'norm_col'])), axis=1)
+            temp_data = sc.AnnData(X=temp_X, obs=data.obs.copy(), var=var)
+
+            # Calculate dendrogram
+            sc.tl.dendrogram(temp_data, groupby=groupby, key_added=key_added)
+            linkage_matrix = temp_data.uns[key_added]['linkage']
+        else:
+            sc.tl.dendrogram(data, groupby=groupby, key_added=key_added)
+            linkage_matrix = data.uns[key_added]['linkage']
 
         # Form clusters from the dendrogram
         cluster_labels = sch.fcluster(linkage_matrix, t=num_clusters, criterion='maxclust')
@@ -276,9 +293,8 @@ class XeniumCluster:
             for cluster_id in unique_clusters:
                 indices = np.where(colors == cluster_id)[0]
                 ax.scatter(
-                    data.obs["x_location"].iloc[indices],
-                    data.obs["y_location"].iloc[indices],
-                    s=9,  # Adjust spot size as necessary
+                    data.obs["row"].iloc[indices],
+                    data.obs["col"].iloc[indices],
                     label=f'Cluster {cluster_id}'
                 )
 
@@ -293,8 +309,69 @@ class XeniumCluster:
             # Adjust layout to make space for the legend outside the plot
             plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
 
-            directory = f"results/{self.dataset_name}/hierarchical/"
+            directory = f"results/{self.dataset_name}/hierarchical/{num_clusters}_SPATIALINIT={include_spatial}/"
             os.makedirs(directory, exist_ok=True)
             plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
 
         return data.obs[key_added]
+
+    def KMeans(
+            self,
+            data: ad.AnnData,
+            K: int = 3,
+            include_spatial=True,
+            normalize=True,
+            save_plot=True,
+        ):
+            
+            spatial_init_data = data.X
+
+            if include_spatial:
+
+                spatial_locations = data.obs[["row", "col"]]
+
+                spatial_init_data = np.concatenate((spatial_locations, data.X), axis=1)
+
+            if normalize:
+
+                spatial_init_data = StandardScaler().fit_transform(spatial_init_data)
+
+            kmeans = KMeans(n_clusters=K).fit(spatial_init_data)
+
+            cluster_assignments = kmeans.predict(spatial_init_data)
+
+            # Save plot if required
+            if save_plot:
+
+                # Create the figure with specified size
+                fig, ax = plt.subplots(figsize=(12, 8))
+
+                # Plot data points
+                colors = [int(x) for x in cluster_assignments]
+                unique_clusters = np.unique(colors)
+
+                for cluster_id in unique_clusters:
+                    indices = np.where(colors == cluster_id)[0]
+                    ax.scatter(
+                        data.obs["row"].iloc[indices],
+                        data.obs["col"].iloc[indices],
+                        label=f'Cluster {cluster_id}'
+                    )
+
+                # Configure legend to fit the plot height
+                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+
+                # Set axis labels and title
+                ax.set_xlabel("x_coord")
+                ax.set_ylabel("y_coord")
+                ax.set_title(f"KMeans Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
+
+                # Adjust layout to make space for the legend outside the plot
+                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+
+                directory = f"results/{self.dataset_name}/KMeans/{K}_SPATIALINIT={include_spatial}/"
+                os.makedirs(directory, exist_ok=True)
+                plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
+
+                return cluster_assignments
+
