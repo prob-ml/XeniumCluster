@@ -223,7 +223,7 @@ class XeniumCluster:
                 ax.set_title(f"Louvain Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
 
                 # Adjust layout to make space for the legend outside the plot
-                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+                _ = plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
 
                 directory = f"results/{self.dataset_name}/Louvain/"
                 os.makedirs(directory, exist_ok=True)

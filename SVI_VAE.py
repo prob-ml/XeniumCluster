@@ -3,7 +3,6 @@ import os
 import torch
 import pyro
 import json
-import math
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import PyroOptim
 from torch.optim import Adam
@@ -36,6 +35,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
+MIN_CONCENTRATION = 0.1
+
 def prepare_DLPFC_data(
     section_id=151670,
     num_pcs=5,
@@ -66,50 +67,37 @@ def prepare_Xenium_data(
         likelihood_mode="PCA",
         num_pcs=5,
         hvg_var_prop=0.5,
-        min_expressions_per_spot=10
     ):
 
-    data_filepath = f"data/spot_data/{dataset}/hBreast_SPOTSIZE={spot_size}um_z={third_dim}.h5ad"
-    
+    # Path to your .gz file
+    file_path = f'data/{dataset}/transcripts.csv.gz'
+
+    # Read the gzipped CSV file into a DataFrame
+    df_transcripts = pd.read_csv(file_path, compression='gzip')
+    df_transcripts["error_prob"] = 10 ** (-df_transcripts["qv"]/10)
+    df_transcripts.head(), df_transcripts.shape
+
+    # drop cells without ids
+    df_transcripts = df_transcripts[df_transcripts["cell_id"] != -1]
+
+    # drop blanks and controls
+    df_transcripts = df_transcripts[~df_transcripts["feature_name"].str.startswith('BLANK_') & ~df_transcripts["feature_name"].str.startswith('NegControl')]
+
+    # prepare spots data
     if spots:
+        clustering = XeniumCluster(data=df_transcripts, dataset_name="hBreast")
+        clustering.set_spot_size(spot_size)
 
-        if os.path.exists(data_filepath):
-
-            clustering = XeniumCluster(data=None, dataset_name="hBreast")
-            clustering.set_spot_size(spot_size)
-            print("Loading data.")
-            clustering.xenium_spot_data = ad.read_h5ad(data_filepath)
-
+        data_filepath = f"data/spot_data/{dataset}/hBreast_SPOTSIZE={spot_size}um_z={third_dim}.h5ad"
+        if not os.path.exists(data_filepath):
+            clustering.create_spot_data(third_dim=third_dim, save_data=True)
+            clustering.xenium_spot_data.write_h5ad(data_filepath)
         else:
-
-            # Path to your .gz file
-            file_path = f'data/{dataset}/transcripts.csv.gz'
-
-            # Read the gzipped CSV file into a DataFrame
-            df_transcripts = pd.read_csv(file_path, compression='gzip')
-            df_transcripts["error_prob"] = 10 ** (-df_transcripts["qv"]/10)
-            df_transcripts.head(), df_transcripts.shape
-
-            # drop cells without ids
-            df_transcripts = df_transcripts[df_transcripts["cell_id"] != -1]
-
-            # drop blanks and controls
-            df_transcripts = df_transcripts[~df_transcripts["feature_name"].str.startswith('BLANK_') & ~df_transcripts["feature_name"].str.startswith('NegControl')]
-
-            clustering = XeniumCluster(data=df_transcripts, dataset_name="hBreast")
-            clustering.set_spot_size(spot_size)
-
-            if not os.path.exists(data_filepath):
-                print("Generating and saving data")
-                clustering.create_spot_data(third_dim=third_dim, save_data=True)
-                clustering.xenium_spot_data.write_h5ad(data_filepath)
-
-        print("Number of spots: ", clustering.xenium_spot_data.shape[0])
-        clustering.xenium_spot_data = clustering.xenium_spot_data[clustering.xenium_spot_data.X.sum(axis=1) > min_expressions_per_spot]
-        print("Number of spots after filtering: ", clustering.xenium_spot_data.shape[0])
+            clustering.xenium_spot_data = ad.read_h5ad(data_filepath)
 
         if log_normalize:
             clustering.normalize_counts(clustering.xenium_spot_data)
+
 
         if likelihood_mode == "PCA":
             sc.tl.pca(clustering.xenium_spot_data, svd_solver='arpack', n_comps=num_pcs)
@@ -166,6 +154,7 @@ def prepare_Xenium_data(
 
     return data, spatial_locations, clustering # the last one is to regain var/obs access from original data
 
+
 def Xenium_SVI(
         gene_data,
         spatial_locations,
@@ -181,30 +170,17 @@ def Xenium_SVI(
         num_clusters=6, 
         batch_size=512,
         neighborhood_size=2,
-        neighborhood_agg="sum",
+        neighborhood_agg="weighted",
         concentration_amplification=5,
         uncertainty_values = [0.25, 0.5, 0.75, 0.9, 0.99],
         sample_for_assignment=False,
-        evaluate_markers=True, 
+        evaluate_markers=False, 
     ):
-
-    def save_filepath(model, component):
-    
-        total_file_path = (
-            f"results/{dataset_name}/{model}/{component}/{data_file_path}/"
-            f"KMEANSINIT={kmeans_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}"
-            f"/SPATIALINIT={spatial_init}/SAMPLEFORASSIGNMENT={sample_for_assignment}"
-            f"/SPATIALNORM={spatial_normalize}/SPATIALPRIORMULT={concentration_amplification}/SPOTSIZE={spot_size}/AGG={neighborhood_agg}"
-        )
-
-        return total_file_path
 
     # Clear the param store in case we're in a REPL
     pyro.clear_param_store()
 
     spatial_init_data = gene_data
-    empirical_prior_means = torch.ones(num_clusters, spatial_init_data.shape[1])
-    empirical_prior_scales = torch.ones(num_clusters, spatial_init_data.shape[1])
 
     if spatial_init:
 
@@ -220,9 +196,6 @@ def Xenium_SVI(
         kmeans = KMeans(n_clusters=num_clusters).fit(spatial_init_data)
 
         initial_clusters = kmeans.predict(spatial_init_data)
-        for i in range(num_clusters):
-            empirical_prior_means[i] = torch.tensor(spatial_init_data[initial_clusters == i, spatial_locations.shape[1]:].mean(axis=0))
-            empirical_prior_scales[i] = torch.tensor(spatial_init_data[initial_clusters == i, spatial_locations.shape[1]:].std(axis=0))
         
         rows = spatial_locations["row"].astype(int)
         columns = spatial_locations["col"].astype(int)
@@ -252,10 +225,14 @@ def Xenium_SVI(
             case _:
                 raise ValueError("The data mode specified is not supported.")
 
-        if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("KMeans", "clusters")):
-            os.makedirs(bayxensmooth_clusters_filepath)
+        if not os.path.exists(f"results/{dataset_name}/KMeans/clusters/{data_file_path}"):
+            os.makedirs(f"results/{dataset_name}/KMeans/clusters/{data_file_path}")
         plt.savefig(
-            f"{bayxensmooth_clusters_filepath}/result.png"
+            f"results/{dataset_name}/KMeans/clusters/{data_file_path}/"
+            f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+            f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+            f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+            f".png"
         )
 
         if dataset_name == "DLPFC":
@@ -278,10 +255,14 @@ def Xenium_SVI(
 
             data_file_path = f"{data_mode}/{num_pcs}"
 
-            if not os.path.exists(kmeans_wss_filepath := save_filepath("KMeans", "wss")):
-                os.makedirs(kmeans_wss_filepath)
-            with open(f"{kmeans_wss_filepath}/wss.json", 'w') as fp:
-                json.dump(wss, fp)
+            if not os.path.exists(f"results/{dataset_name}/KMeans/cluster_metrics/{data_file_path}/"):
+                os.makedirs(f"results/{dataset_name}/KMeans/cluster_metrics/{data_file_path}/")
+            with open(f"results/{dataset_name}/KMeans/cluster_metrics/{data_file_path}/"
+                f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+                f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+                f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+                f".json", 'w') as fp:
+                json.dump(cluster_metrics, fp)
 
         concentration_priors = torch.tensor(pd.get_dummies(initial_clusters, dtype=float).to_numpy())
 
@@ -308,7 +289,7 @@ def Xenium_SVI(
 
     if neighborhood_agg not in ["sum", "mean"]:
         def weighting_function(x):
-            return torch.where(x != 0, 1 / (x ** 1.5), torch.zeros_like(x)).reshape(-1,1)
+            return torch.where(x != 0, 1 / (x ** 2), torch.zeros_like(x)).reshape(-1,1)
         distances_in_neighborhood = (dist_x + 1) * (dist_x <= neighborhood_size) + (dist_y + 1) * (dist_y <= neighborhood_size)
 
     # Apply the mask to compute the sum of the neighborhood
@@ -334,7 +315,26 @@ def Xenium_SVI(
 
     # Load the data
     data = torch.tensor(gene_data).float()
-    print(data.shape)
+
+    # Encoder
+    # Neural Network for the Encoder (Guide)
+    class Encoder(torch.nn.Module):
+        def __init__(self, input_dim, hidden_dim, z_dim):
+            super().__init__()
+            self.linear = torch.nn.Linear(input_dim, hidden_dim)
+            self.components_weights = torch.nn.Linear(hidden_dim, z_dim)
+
+        def forward(self, x):
+            hidden = torch.nn.Softplus()(self.linear(x))
+            weights = torch.nn.Softmax(dim=1)(self.components_weights(hidden)) # Ensure weights sum to 1.
+            print(self.linear.weight.grad, self.components_weights.weight.grad)
+            return weights
+        
+    # Initialize the neural network
+    input_dim = data.size(1)
+    hidden_dim = 400
+    z_dim = num_clusters
+    encoder = Encoder(input_dim, hidden_dim, z_dim)
 
     def model(data):
 
@@ -352,7 +352,7 @@ def Xenium_SVI(
                 pyro.sample(f"obs_{i}", dist.MixtureOfDiagNormals(cluster_means, cluster_scales, cluster_probs[i]), obs=batch_data[i])
 
     def guide(data):
-        MIN_CONCENTRATION = 0.1
+        pyro.module("encoder", encoder)
         # Initialize cluster assignment probabilities for the entire dataset
         cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive) + MIN_CONCENTRATION
         # Global variational parameters for means and scales
@@ -362,12 +362,11 @@ def Xenium_SVI(
         cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(2))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
-
-            batch_cluster_concentration_params_q = cluster_concentration_params_q[ind] + MIN_CONCENTRATION
+            batch_data = data[ind]
+            batch_cluster_concentration_params_q = concentration_amplification * encoder(batch_data)
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_cluster_concentration_params_q))
 
-    NUM_EPOCHS = 60
-    NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
+    N_STEPS = 5000
 
     # Setup the optimizer
     adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
@@ -376,15 +375,12 @@ def Xenium_SVI(
     # Setup the inference algorithm
     svi = SVI(model, guide, scheduler, loss=Trace_ELBO(num_particles=10))
 
-    for epoch in range(NUM_EPOCHS):
-        running_loss = 0.0
-        for step in range(NUM_BATCHES):
-            loss = svi.step(data)
-            running_loss += loss / batch_size
+    for step in range(N_STEPS):
+        loss = svi.step(data)
         # svi.optim.step()
-        if epoch % 1 == 0:
-            print(f"Epoch {epoch} : loss = {round(running_loss/1e6, 4)}")
-            cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive)
+        if step % 10 == 0:
+            print(f"Step {step} : loss = {round(loss/1e6, 4)}")
+            cluster_concentration_params_q = pyro.param("cluster_concentration_params_q")
             if sample_for_assignment:
                 cluster_probs_q = pyro.sample("cluster_probs", dist.Dirichlet(cluster_concentration_params_q)).detach()     
             else:
@@ -452,10 +448,14 @@ def Xenium_SVI(
             case _:
                 raise ValueError("The data mode specified is not supported.")
 
-        if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters")):
-            os.makedirs(bayxensmooth_clusters_filepath)
+        if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/clusters/{data_file_path}"):
+            os.makedirs(f"results/{dataset_name}/BayXenSmooth/clusters/{data_file_path}")
         plt.savefig(
-            f"{bayxensmooth_clusters_filepath}/result.png"
+            f"results/{dataset_name}/BayXenSmooth/clusters/{data_file_path}/"
+            f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+            f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+            f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+            f".png"
         )
 
         # grab the WSS distance of cluster labels
@@ -464,9 +464,13 @@ def Xenium_SVI(
             current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
             wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
 
-        if not os.path.exists(bayxensmooth_wss_filepath := save_filepath("BayXenSmooth", "wss")):
-            os.makedirs(bayxensmooth_wss_filepath)
-        with open(f"{bayxensmooth_wss_filepath}/wss.json", 'w') as fp:
+        if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/"):
+            os.makedirs(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/")
+        with open(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/"
+            f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+            f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+            f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+            f".json", 'w') as fp:
             json.dump(wss, fp)
 
         cmap = get_cmap('rainbow')
@@ -518,10 +522,14 @@ def Xenium_SVI(
                 ax.set_ylabel('Mean Expression') 
                 ax.set_title(gene) 
                 ax.set_xticks(mean_expression_by_cluster[gene].index) 
-                if not os.path.exists(bayxensmooth_expression_filepath := save_filepath("BayXenSmooth", "expressions")):
-                    os.makedirs(f"{bayxensmooth_expression_filepath}")
+                if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/expressions/{data_file_path}/"):
+                    os.makedirs(f"results/{dataset_name}/BayXenSmooth/expressions/{data_file_path}/")
                 plt.savefig(
-                    f"{bayxensmooth_expression_filepath}/GENE={gene}.png"
+                    f"results/{dataset_name}/BayXenSmooth/expressions/{data_file_path}/"
+                    f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+                    f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+                    f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+                    f"_GENE={gene}.png"
                 )
         
         # confidence mapping
@@ -532,28 +540,31 @@ def Xenium_SVI(
         colors = plt.cm.get_cmap('Greys', num_clusters + 1)
         colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
-        confidence_proportions = {}
+        # confidence map plotting
         for uncertainty_value in uncertainty_values:
-            confidence_matrix = (cluster_confidences > uncertainty_value).float()
-            confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
             plt.figure(figsize=(6, 6))
             plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
             plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
             # PLOT ALL UNCERTAINTY VALUESs
             plt.title(r'$P(z_i = k) > $' + f'{uncertainty_value}')
-            if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty")):
-                os.makedirs(bayxensmooth_uncertainty_filepath)
+            if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/uncertainty/{data_file_path}/"):
+                os.makedirs(f"results/{dataset_name}/BayXenSmooth/uncertainty/{data_file_path}/")
             plt.savefig(
-                f"{bayxensmooth_uncertainty_filepath}/CONFIDENCE={uncertainty_value}.png"
+                f"results/{dataset_name}/BayXenSmooth/uncertainty/{data_file_path}/"
+                f"CONFIDENCE={uncertainty_value}_KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+                f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+                f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
+                f".png"
             )
 
     else:
 
         plt.scatter(spatial_locations["x_location"], spatial_locations["y_location"], s=1, c=cluster_assignments_q)
-        if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters")):
-            os.makedirs(bayxensmooth_clusters_filepath)
         plt.savefig(
-            f"{bayxensmooth_clusters_filepath}/result.png"
+            f"results/{dataset_name}/BayXenSmooth/clusters/{data_file_path}/"
+            f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
+            f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
+            f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}.png"
         )
 
     return cluster_concentration_params_q, cluster_means_q, cluster_scales_q
@@ -620,7 +631,7 @@ def main():
         dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
         spot_size=args.spot_size, 
         num_clusters=args.num_clusters, 
-        batch_size=16, 
+        batch_size=4, 
         concentration_amplification=args.concentration_amplification, 
         sample_for_assignment=args.sample_for_assignment,
         kmeans_init=args.kmeans_init,
@@ -656,16 +667,13 @@ def main():
         dataset_name="DLPFC"
         data_file_path = f"{args.data_mode}/{args.num_pcs}"
 
-        total_file_path = (
-            f"results/{dataset_name}/{args.model}/{args.component}/{data_file_path}/"
-            f"KMEANSINIT={args.kmeans_init}/NEIGHBORSIZE={args.neighborhood_size}/NUMCLUSTERS={args.num_clusters}"
-            f"/SPATIALINIT={args.spatial_init}/SAMPLEFORASSIGNMENT={args.sample_for_assignment}"
-            f"/SPATIALNORM={args.spatial_normalize}/SPATIALPRIORMULT={args.concentration_amplification}/SPOTSIZE={args.spot_size}/AGG={args.neighborhood_agg}"
-        )
-
-        if not os.path.exists(total_file_path):
-            os.makedirs(total_file_path)
-        with open(f"{total_file_path}/cluster_metrics.json", 'w') as fp:
+        if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/cluster_metrics/{data_file_path}/"):
+            os.makedirs(f"results/{dataset_name}/BayXenSmooth/cluster_metrics/{data_file_path}/")
+        with open(f"results/{dataset_name}/BayXenSmooth/cluster_metrics/{data_file_path}/"
+            f"KMEANSINIT={args.kmeans_init}_NEIGHBORSIZE={args.neighborhood_size}_NUMCLUSTERS={args.num_clusters}"
+            f"_SPATIALINIT={args.spatial_init}_SAMPLEFORASSIGNMENT={args.sample_for_assignment}"
+            f"_SPATIALNORM={args.spatial_normalize}_SPATIALPRIORMULT={args.concentration_amplification}_SPOTSIZE={args.spot_size}"
+            f".json", 'w') as fp:
             json.dump(cluster_metrics, fp)
 
 if __name__ == "__main__":
