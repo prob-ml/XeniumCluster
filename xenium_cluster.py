@@ -5,8 +5,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import os
+import subprocess
+import torch
 
 from utils.embeddings import *
+from matplotlib.colors import ListedColormap
 from typing import List
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -106,7 +109,7 @@ class XeniumCluster:
     def generate_neighborhood_graph(self, data: ad.AnnData, n_neighbors=15, n_pcs=20, plot_pcas=True):
         
         # generate the neigborhood graph based on pca
-        sc.tl.pca(data, svd_solver='arpack')
+        sc.pp.pca(data, svd_solver='arpack')
         if plot_pcas:
             sc.pl.pca_variance_ratio(data, log=True)
         sc.pp.neighbors(data, n_neighbors=n_neighbors, n_pcs=n_pcs)
@@ -374,4 +377,52 @@ class XeniumCluster:
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
 
                 return cluster_assignments
+            
+    def BayesSpace(
+        self,
+        data: ad.AnnData,
+        K: int = 3,
+    ):
 
+        def run_r_script(script_path: str, *args):
+            """
+            Function to run an R script with optional arguments.
+            
+            Parameters:
+            script_path (str): Path to the R script.
+            *args: Additional arguments to pass to the R script.
+            """
+            command = ["Rscript", script_path] + list(args)
+            subprocess.run(command, check=True, capture_output=False)
+
+        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{K}")
+
+        target_dir = f"results/{self.dataset_name}/BayesSpace/{self.SPOT_SIZE}"
+        BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}.csv", index_col=0)
+        data.obs["cluster"] = np.array(BayesSpace_clusters["x"])
+        # Extracting row, col, and cluster values from the dataframe
+        rows = torch.tensor(data.obs["row"].astype(int))
+        cols = torch.tensor(data.obs["col"].astype(int))
+        clusters = torch.tensor(data.obs["cluster"].astype(int))
+        num_clusters = len(np.unique(clusters))
+
+        num_rows = int(max(rows) - min(rows) + 1)
+        num_cols = int(max(cols) - min(cols) + 1)
+
+        cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
+
+        cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
+
+        colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+        colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cluster_grid, cmap=colormap, interpolation='nearest', origin='lower')
+        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        plt.title('Cluster Assignment with KMeans')
+
+        plt.savefig(
+            f"{target_dir}/clusters_K={K}.png"
+        )
+
+        return data.obs["cluster"]

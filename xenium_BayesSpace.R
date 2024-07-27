@@ -1,58 +1,79 @@
-if (!requireNamespace("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-BiocManager::install("BayesSpace")
+# if (!requireNamespace("BiocManager", quietly = TRUE)) {
+#     install.packages("BiocManager")
+#     BiocManager::install("BayesSpace")
+# }
 
 library(SingleCellExperiment)
 library(ggplot2)
 library(BayesSpace)
 library(Matrix)
 
-# sce <- readVisium("data/hBreast")
+# sce <- readVisium("data/sce")
 
-rowData <- read.csv("../Downloads/rowData.csv", stringsAsFactors=FALSE, row.names=1)
-colData <- read.csv("../Downloads/colData.csv", stringsAsFactors=FALSE, row.names=1)
-countsData <- t(read.csv("../Downloads/counts.csv", row.names=1, check.names=F, stringsAsFactors=FALSE))
+BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, K=NULL) {
 
-# Create unique row names from the first column, then remove it from countsData
-rownames(countsData)<- rownames(rowData)
-colnames(countsData) <-rownames(colData)
+  rowData <- read.csv(paste0("data/BayesSpace/rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
+  colData <- read.csv(paste0("data/BayesSpace/colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
+  countsData <- t(read.csv(paste0("data/BayesSpace/counts_SPOT_SIZE=", SPOT_SIZE, ".csv"), row.names=1, check.names=F, stringsAsFactors=FALSE))
+  
+  # Create unique row names from the first column, then remove it from countsData
+  rownames(countsData)<- rownames(rowData)
+  colnames(countsData) <-rownames(colData)
+  
+  is_already_log_transformed = TRUE
+  if (is_already_log_transformed) {
+    sce <- SingleCellExperiment(assays=list(logcounts=as(as.matrix(countsData), "dgCMatrix")),
+                                rowData=rowData,
+                                colData=colData)  
+  } else {
+    sce <- SingleCellExperiment(assays=list(counts=as(as.matrix(countsData), "dgCMatrix")),
+                                rowData=rowData,
+                                colData=colData)  
+  }
+  
+  set.seed(102)
+  
+  if (is_already_log_transformed) {
+    sce <- spatialPreprocess(sce, platform="ST", 
+                                 n.PCs=7, n.HVGs=2000, log.normalize=FALSE)
+  } else {
+    sce <- spatialPreprocess(sce, platform="ST", 
+                                 n.PCs=7, n.HVGs=2000, log.normalize=TRUE) 
+  }
+  
+  
+  sce <- sce[, !grepl("^(BLANK_|NegControl)", colnames(sce))]
+  sce <- qTune(sce, qs=seq(2, 15), platform="ST", d=7)
+  qPlot(sce)
+  
+  set.seed(149)
+  if (is.null(K))
+    q_optimal <- attr(sce, "q.logliks")[which.max(attr(sce, "q.logliks")$loglik),]$q
+  else
+    q_optimal <- K
+  sce <- spatialCluster(sce, q=q_optimal, platform="ST", d=7,
+                            init.method="mclust", model="t", gamma=2,
+                            nrep=1000, burn.in=100,
+                            save.chain=TRUE)
+  
+  dir_path <- paste0("results/", dataset, "/BayesSpace/", SPOT_SIZE)
+  if (!dir.exists(dir_path)) {
+    dir.create(dir_path, recursive = TRUE)
+  }
+  write.csv(sce$spatial.cluster, paste0(dir_path, "/clusters_K=", q_optimal, ".csv"))
+  
+  clusterPlot(sce, palette=c("purple", "red", "blue", "yellow"), color="black") +
+    theme_bw() +
+    xlab("Column") +
+    ylab("Row") +
+    labs(fill="BayesSpace\ncluster", title="Spatial clustering of ST_mel1_rep2")
+  
+  return(sce$spatial.cluster)
+}
 
-sce <- SingleCellExperiment(assays=list(counts=as(as.matrix(countsData), "dgCMatrix")),
-                            rowData=rowData,
-                            colData=colData)
-
-hBreast <- sce
-
-set.seed(102)
-hBreast <- spatialPreprocess(hBreast, platform="ST", 
-                              n.PCs=7, n.HVGs=2000, log.normalize=TRUE)
-
-hBreast <- hBreast[, !grepl("^(BLANK_|NegControl)", colnames(hBreast))]
-hBreast <- qTune(hBreast, qs=seq(2, 15), platform="ST", d=7)
-qPlot(hBreast)
-
-set.seed(149)
-q_optimal <- attr(hBreast, "q.logliks")[which.max(attr(hBreast, "q.logliks")$loglik),]$q
-hBreast <- spatialCluster(hBreast, q=q_optimal, platform="ST", d=7,
-                           init.method="mclust", model="t", gamma=2,
-                           nrep=1000, burn.in=100,
-                           save.chain=TRUE)
-
-clusterPlot(hBreast)
-
-png('BayesSpace_hBreast.png')
-
-clusterPlot(hBreast, palette=c("purple", "red", "blue", "yellow"), color="black") +
-  theme_bw() +
-  xlab("Column") +
-  ylab("Row") +
-  labs(fill="BayesSpace\ncluster", title="Spatial clustering of ST_mel1_rep2")
-
-
-# png('BayesSpace_hBreast_ENHANCED.png')
-# hBreast.enhanced <- spatialEnhance(hBreast, q=4, platform="ST", d=7,
-#                                     model="t", gamma=2,
-#                                     jitter_prior=0.3, jitter_scale=3.5,
-#                                     nrep=1000, burn.in=100,
-#                                     save.chain=TRUE)
+args <- commandArgs(trailingOnly = TRUE)
+dataset_name <- args[1]
+SPOT_SIZE <- as.numeric(args[2])
+K <- ifelse(length(args) > 2, as.numeric(args[3]), NULL)
+cat(c(SPOT_SIZE, K))
+BayesSpace(dataset_name, SPOT_SIZE, K)
