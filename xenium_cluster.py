@@ -397,9 +397,9 @@ class XeniumCluster:
 
         run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{K}")
 
-        target_dir = f"results/{self.dataset_name}/BayesSpace/{self.SPOT_SIZE}"
+        target_dir = f"results/{self.dataset_name}/BayesSpace/{K}/clusters/{self.SPOT_SIZE}"
         BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}.csv", index_col=0)
-        data.obs["cluster"] = np.array(BayesSpace_clusters["x"])
+        data.obs["cluster"] = np.array(BayesSpace_clusters["BayesSpace cluster"])
         # Extracting row, col, and cluster values from the dataframe
         rows = torch.tensor(data.obs["row"].astype(int))
         cols = torch.tensor(data.obs["col"].astype(int))
