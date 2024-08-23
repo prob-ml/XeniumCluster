@@ -10,7 +10,7 @@ library(Matrix)
 
 # sce <- readVisium("data/sce")
 
-BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, K=NULL) {
+BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, K=NULL, grid_search=TRUE) {
 
   rowData <- read.csv(paste0("data/BayesSpace/rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
   colData <- read.csv(paste0("data/BayesSpace/colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
@@ -51,25 +51,33 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, K=NULL) {
     q_optimal <- attr(sce, "q.logliks")[which.max(attr(sce, "q.logliks")$loglik),]$q
   else
     q_optimal <- K
-  sce <- spatialCluster(sce, q=q_optimal, platform="ST", d=7,
-                            init.method="mclust", model="t", gamma=2,
-                            nrep=1000, burn.in=100,
-                            save.chain=TRUE)
   
-  dir_path <- paste0("results/", dataset, "/BayesSpace/", q_optimal, "/clusters/", SPOT_SIZE)
-  if (!dir.exists(dir_path)) {
-    dir.create(dir_path, recursive = TRUE)
+  if (grid_search) {
+    gamma_list <- seq(1.0, 3.0, by = 0.25)
+  } else {
+    gamma_list <- c(2)
   }
-  cluster_data <- data.frame(sce$spatial.cluster)
-  colnames(cluster_data) <- c("BayesSpace cluster")
-  write.csv(cluster_data, paste0(dir_path, "/clusters_K=", q_optimal, ".csv"), row.names = TRUE)
   
-  clusterPlot(sce, palette=c("purple", "red", "blue", "yellow"), color="black") +
-    theme_bw() +
-    xlab("Column") +
-    ylab("Row") +
-    labs(fill="BayesSpace\ncluster", title="Spatial clustering of ST_mel1_rep2")
-  
+  for (gamma in gamma_list) {
+    sce <- spatialCluster(sce, q=q_optimal, platform="ST", d=7,
+                              init.method="mclust", model="t", gamma=2,
+                              nrep=1000, burn.in=100,
+                              save.chain=TRUE)
+    
+    dir_path <- paste0("results/", dataset, "/BayesSpace/", q_optimal, "/clusters/", SPOT_SIZE)
+    if (!dir.exists(dir_path)) {
+      dir.create(dir_path, recursive = TRUE)
+    }
+    cluster_data <- data.frame(sce$spatial.cluster)
+    colnames(cluster_data) <- c("BayesSpace cluster")
+    write.csv(cluster_data, paste0(dir_path, "/clusters_K=", q_optimal, "_gamma=", gamma, ".csv"), row.names = TRUE)
+    
+    clusterPlot(sce, palette=c("purple", "red", "blue", "yellow"), color="black") +
+      theme_bw() +
+      xlab("Column") +
+      ylab("Row") +
+      labs(fill="BayesSpace\ncluster", title="Spatial clustering of ST_mel1_rep2")
+  }
   return(sce$spatial.cluster)
 }
 
