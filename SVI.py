@@ -179,7 +179,7 @@ def Xenium_SVI(
         dataset_name="hBreast",
         kmeans_init=True,
         spatial_init=True,
-        spatial_normalize=True,
+        spatial_normalize=1.0,
         num_clusters=6, 
         batch_size=512,
         neighborhood_size=2,
@@ -187,6 +187,7 @@ def Xenium_SVI(
         concentration_amplification=5,
         uncertainty_values = [0.25, 0.5, 0.75, 0.9, 0.99],
         evaluate_markers=True, 
+        num_posterior_samples=100,
     ):
 
     print(f"Batch Size is {batch_size}.")
@@ -343,11 +344,12 @@ def Xenium_SVI(
     for sample_for_assignment in sample_for_assignment_options:
 
         if sample_for_assignment:
-            cluster_probs_prior = dist.Dirichlet(concentration_priors).sample()  
+            cluster_probs_prior_TRUE = dist.Dirichlet(concentration_priors).sample()
+            cluster_assignments_prior = cluster_probs_prior_TRUE.argmax(dim=1)  
         else:
             # the probs aren't sampled and we calculate the EV instead
-            cluster_probs_prior = concentration_priors.softmax(dim=1)
-        cluster_assignments_prior = cluster_probs_prior.argmax(dim=1)
+            cluster_probs_prior_FALSE = concentration_priors.softmax(dim=1)
+            cluster_assignments_prior = cluster_probs_prior_FALSE.argmax(dim=1)
 
         # Load the data
         data = torch.tensor(gene_data).float()
@@ -411,14 +413,15 @@ def Xenium_SVI(
     # Setup the inference algorithm
     svi = SVI(model, guide, scheduler, loss=Trace_ELBO(num_particles=10))
 
+    # Initialize DataLoader for batched data processing
+    data_loader = DataLoader(data, batch_size=batch_size, shuffle=True)
+    
     epoch_pbar = tqdm(range(NUM_EPOCHS))
     for epoch in epoch_pbar:
         epoch_pbar.set_description(f"Epoch {epoch}")
         running_loss = 0.0
-        batch_pbar = tqdm(range(NUM_BATCHES))
-        for step in batch_pbar:
-            batch_pbar.set_description(f"Step {step}")
-            loss = svi.step(data)
+        for batch in data_loader:
+            loss = svi.step(batch)
             running_loss += loss / batch_size
         # svi.optim.step()
         if epoch % 1 == 0:
@@ -448,22 +451,27 @@ def Xenium_SVI(
 
 
     # Grab the learned variational parameters
-
     sample_for_assignment_options = [False, True]
 
     for sample_for_assignment in sample_for_assignment_options:
 
         cluster_concentration_params_q = pyro.param("cluster_concentration_params_q")
         if sample_for_assignment:
-            cluster_probs_q = pyro.sample("cluster_probs", dist.Dirichlet(cluster_concentration_params_q)).detach()     
+            cluster_probs_q += (1 / num_posterior_samples) * pyro.sample("cluster_probs", dist.Dirichlet(cluster_concentration_params_q)).detach()  
+            # retrieve the relevant prior for comparison
+            cluster_probs_prior_TRUE = dist.Dirichlet(concentration_priors).sample()
+            cluster_assignments_prior = cluster_probs_prior_TRUE.argmax(dim=1)     
         else:
             # the probs aren't sampled and we calculate the EV instead
             cluster_probs_q = cluster_concentration_params_q.softmax(dim=1)
-        cluster_assignments_q = cluster_probs_q.argmax(dim=1)
+            # retrieve the relevant prior for comparison
+            cluster_probs_prior_FALSE = concentration_priors.softmax(dim=1)
+            cluster_assignments_prior = cluster_probs_prior_FALSE.argmax(dim=1)
         
         cluster_concentration_params_q = cluster_concentration_params_q.detach()
         cluster_means_q = pyro.param("cluster_means_q").detach()
         cluster_scales_q = pyro.param("cluster_scales_q").detach()
+        cluster_probs_q = cluster_probs_q.detach()
 
         # Plotting
         if spot_size:
@@ -505,6 +513,7 @@ def Xenium_SVI(
             )
 
             clusters = pd.DataFrame(cluster_assignments_q, columns=["BayXenSmooth cluster"]).to_csv(f"{bayxensmooth_clusters_filepath}/clusters_K={num_clusters}.csv")
+            soft_clusters = pd.DataFrame(cluster_probs_q, columns=[f'P(z_i = {i})'  for i in range(1, num_clusters + 1)]).to_csv(f"{bayxensmooth_clusters_filepath}/soft_clusters_K={num_clusters}.csv")
 
             if not os.path.exists(bayxensmooth_similar_filepath := save_filepath("BayXenSmooth", "prior_v_posterior", sample_for_assignment)):
                 os.makedirs(bayxensmooth_similar_filepath)
@@ -634,6 +643,7 @@ def parse_args():
     parser.add_argument("--data_mode", type=str, required=True)
     parser.add_argument("--num_pcs", type=int, required=True)
     parser.add_argument("--hvg_var_prop", type=float, required=True)
+    parser.add_argument("--neighborhood_agg", type=str, required=True)
     return parser.parse_args()
 
 def main():
@@ -678,7 +688,8 @@ def main():
         kmeans_init=args.kmeans_init,
         neighborhood_size=args.neighborhood_size,
         spatial_init=args.spatial_init,
-        spatial_normalize=args.spatial_normalize
+        spatial_normalize=args.spatial_normalize,
+        neighborhood_agg=args.neighborhood_agg
     )
 
     sample_for_assignment_options = [False, True]
