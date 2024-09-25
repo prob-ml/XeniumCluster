@@ -176,7 +176,7 @@ class XeniumCluster:
                 os.makedirs(directory, exist_ok=True)
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
 
-        return {resolution: data.obs[f'leiden_{resolution}'] for resolution in resolutions}
+        return {resolution: data.obs[f'leiden_{resolution}'].values.astype(int) for resolution in resolutions}
 
     def Louvain(
             self,
@@ -232,7 +232,7 @@ class XeniumCluster:
                 os.makedirs(directory, exist_ok=True)
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
 
-        return {resolution: data.obs[f'louvain_{resolution}'] for resolution in resolutions}
+        return {resolution: data.obs[f'louvain_{resolution}'].values.astype(int) for resolution in resolutions}
 
     def Hierarchical(
             self,
@@ -316,7 +316,7 @@ class XeniumCluster:
             os.makedirs(directory, exist_ok=True)
             plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
 
-        return data.obs[key_added]
+        return data.obs[key_added].values.astype(int)
 
     def KMeans(
             self,
@@ -376,12 +376,14 @@ class XeniumCluster:
                 os.makedirs(directory, exist_ok=True)
                 plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
 
-                return cluster_assignments
+            return cluster_assignments
             
     def BayesSpace(
         self,
         data: ad.AnnData,
+        num_pcs: int = 15,
         K: int = 3,
+        grid_search: bool = True,
     ):
 
         def run_r_script(script_path: str, *args):
@@ -395,34 +397,36 @@ class XeniumCluster:
             command = ["Rscript", script_path] + list(args)
             subprocess.run(command, check=True, capture_output=False)
 
-        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{K}")
+        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{num_pcs}", f"{K}")
 
-        target_dir = f"results/{self.dataset_name}/BayesSpace/{K}/clusters/{self.SPOT_SIZE}"
-        BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}.csv", index_col=0)
-        data.obs["cluster"] = np.array(BayesSpace_clusters["BayesSpace cluster"])
-        # Extracting row, col, and cluster values from the dataframe
-        rows = torch.tensor(data.obs["row"].astype(int))
-        cols = torch.tensor(data.obs["col"].astype(int))
-        clusters = torch.tensor(data.obs["cluster"].astype(int))
-        num_clusters = len(np.unique(clusters))
+        target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{self.SPOT_SIZE}"
+        gammas = np.linspace(1, 3, 9) if grid_search else [2]
+        for gamma in gammas:
+            BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}_gamma={gamma}.csv", index_col=0)
+            data.obs["cluster"] = np.array(BayesSpace_clusters["BayesSpace cluster"])
+            # Extracting row, col, and cluster values from the dataframe
+            rows = torch.tensor(data.obs["row"].astype(int))
+            cols = torch.tensor(data.obs["col"].astype(int))
+            clusters = torch.tensor(data.obs["cluster"].astype(int))
+            num_clusters = len(np.unique(clusters))
 
-        num_rows = int(max(rows) - min(rows) + 1)
-        num_cols = int(max(cols) - min(cols) + 1)
+            num_rows = int(max(rows) - min(rows) + 1)
+            num_cols = int(max(cols) - min(cols) + 1)
 
-        cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
+            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-        cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
-        colors = plt.cm.get_cmap('viridis', num_clusters + 1)
-        colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
-        plt.figure(figsize=(6, 6))
-        plt.imshow(cluster_grid, cmap=colormap, interpolation='nearest', origin='lower')
-        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-        plt.title('Cluster Assignment with KMeans')
+            plt.figure(figsize=(6, 6))
+            plt.imshow(cluster_grid, cmap=colormap, interpolation='nearest', origin='lower')
+            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+            plt.title('Cluster Assignment with KMeans')
 
-        plt.savefig(
-            f"{target_dir}/clusters_K={K}.png"
-        )
+            plt.savefig(
+                f"{target_dir}/clusters_K={K}_gamma={gamma}.png"
+            )
 
-        return data.obs["cluster"]
+        return data.obs["cluster"].values.astype(int)

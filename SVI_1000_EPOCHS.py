@@ -216,29 +216,11 @@ def Xenium_SVI(
 
     print(f"Batch Size is {batch_size}.")
 
-    def custom_cluster_initialization(original_adata, method, K=17):
-
-        original_adata.generate_neighborhood_graph(original_adata.xenium_spot_data, plot_pcas=False)
-
-        # This function initializes clusters based on the specified method
-        if method == "K-Means":
-            initial_clusters = original_adata.KMeans(original_adata.xenium_spot_data, save_plot=True, K=K, include_spatial=False)
-        elif method == "Hierarchical":
-            initial_clusters = original_adata.Hierarchical(original_adata.xenium_spot_data, save_plot=True, K=K)
-        elif method == "Leiden":
-            initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.75], save_plot=True, K=K)[0.75]
-        elif method == "Louvain":
-            initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=True, K=K)[1.0]
-        else:
-            raise ValueError(f"Unknown method: {method}")
-
-        return initial_clusters
-
     def save_filepath(model, component, sample_for_assignment=None):
-
+    
         total_file_path = (
             f"results/{dataset_name}/{model}/{component}/{data_file_path}/"
-            f"INIT={custom_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}"
+            f"KMEANSINIT={kmeans_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}"
             f"/SPATIALINIT={spatial_init}/SAMPLEFORASSIGNMENT={sample_for_assignment}"
             f"/SPATIALNORM={spatial_normalize}/SPATIALPRIORMULT={concentration_amplification}/SPOTSIZE={spot_size}/AGG={neighborhood_agg}"
         )
@@ -248,27 +230,16 @@ def Xenium_SVI(
     pyro.clear_param_store()
 
     # Clamping
-    MIN_CONCENTRATION = 0.1
+    MIN_CONCENTRATION = 0.01
 
     spatial_init_data = StandardScaler().fit_transform(gene_data)
     gene_data = StandardScaler().fit_transform(gene_data)
     empirical_prior_means = torch.ones(num_clusters, spatial_init_data.shape[1])
     empirical_prior_scales = torch.ones(num_clusters, spatial_init_data.shape[1])
 
-    rows = spatial_locations["row"].astype(int)
-    columns = spatial_locations["col"].astype(int)
+    if kmeans_init or custom_init:
 
-    num_rows = max(rows) + 1
-    num_cols = max(columns) + 1
-
-    if custom_init or kmeans_init:
-
-        if custom_init:
-
-            initial_clusters = custom_cluster_initialization(original_adata, custom_init)
-            concentration_priors = torch.tensor(pd.get_dummies(initial_clusters, dtype=float).to_numpy())
-
-        elif kmeans_init:
+        if kmeans_init:
 
             kmeans_init_data = np.concatenate((spatial_locations, original_adata.xenium_spot_data.X), axis=1)
             kmeans_init_data = StandardScaler().fit_transform(kmeans_init_data)
@@ -284,9 +255,32 @@ def Xenium_SVI(
 
             initial_clusters = kmeans.predict(kmeans_init_data)
 
-            for i in range(num_clusters):
-                empirical_prior_means[i] = torch.tensor(gene_data[initial_clusters == i].mean(axis=0))
-                empirical_prior_scales[i] = torch.tensor(gene_data[initial_clusters == i].std(axis=0))
+        elif custom_init:
+
+            initial_clusters = pd.read_csv(custom_init)
+            kmeans_init = custom_init.split('/')[2] # extract model name from filepath
+        
+        for i in range(num_clusters):
+            empirical_prior_means[i] = torch.tensor(gene_data[initial_clusters == i].mean(axis=0))
+            empirical_prior_scales[i] = torch.tensor(gene_data[initial_clusters == i].std(axis=0))
+        
+        rows = spatial_locations["row"].astype(int)
+        columns = spatial_locations["col"].astype(int)
+
+        num_rows = max(rows) + 1
+        num_cols = max(columns) + 1
+
+        cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
+        
+        cluster_grid[rows, columns] = torch.tensor(initial_clusters) + 1
+
+        colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+        colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        plt.title('Cluster Assignment with KMeans')
 
         match data_mode:
             case "PCA":
@@ -297,26 +291,12 @@ def Xenium_SVI(
                 data_file_path = f"{data_mode}"
             case _:
                 raise ValueError("The data mode specified is not supported.")
-            
-        if kmeans_init and not custom_init:
 
-            if not os.path.exists(kmeans_clusters_filepath := save_filepath("KMeans", "clusters")):
-                os.makedirs(kmeans_clusters_filepath)
-            _ = plt.savefig(
-                f"{kmeans_clusters_filepath}/result.png"
-            )
-
-            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
-            
-            cluster_grid[rows, columns] = torch.tensor(initial_clusters, dtype=torch.int) + 1
-
-            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
-            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
-
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-            plt.title('Cluster Assignment with KMeans')
+        if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("KMeans", "clusters")):
+            os.makedirs(bayxensmooth_clusters_filepath)
+        _ = plt.savefig(
+            f"{bayxensmooth_clusters_filepath}/result.png"
+        )
 
         if dataset_name == "DLPFC":
             # Create a DataFrame for easier handling
@@ -358,17 +338,18 @@ def Xenium_SVI(
     num_spots = concentration_priors.shape[0]
 
     # Initialize an empty tensor for spatial concentration priors
-    spatial_concentration_priors =  spatial_concentration_priors = torch.zeros_like(concentration_priors, dtype=torch.float64)
+    spatial_concentration_priors = torch.zeros_like(concentration_priors)
 
     spot_locations = KDTree(concentration_w_locations[:, :2].cpu())  # Ensure this tensor is in host memory
     neighboring_spot_indexes = spot_locations.query_ball_point(concentration_w_locations[:, :2].cpu(), r=neighborhood_size, p=1, workers=8)
 
     # Iterate over each spot
     for i in tqdm(range(num_spots)):
-
+        
+        # print(f"Spot {i} has {len(neighboring_spot_indexes[i])} neighbors.")
         # Select priors in the neighborhood
         priors_in_neighborhood = concentration_priors[neighboring_spot_indexes[i]]
-        # print(f"Spot {i} has {len(neighboring_spot_indexes[i])} neighbors")
+        # print(neighboring_spot_indexes[i])
         # print(priors_in_neighborhood)
 
         # Compute the sum or mean, or apply a custom weighting function
@@ -377,23 +358,23 @@ def Xenium_SVI(
         elif neighborhood_agg == "mean":
             neighborhood_expression = priors_in_neighborhood.mean(dim=0)
         else:
+            neighborhood_agg = "weighted"
             locations = original_adata.xenium_spot_data.obs[["x_location", "y_location", "z_location"]].values
             neighboring_locations = locations[neighboring_spot_indexes[i]].astype(float)
             distances = torch.tensor(np.linalg.norm(neighboring_locations - locations[i], axis=1))
             def distance_weighting(x):
-                weight = 1/(1 + x/spot_size)
-                # print(weight)
-                return weight
+                return 1/(1 + x/spot_size)
             neighborhood_expression = (priors_in_neighborhood * distance_weighting(distances).reshape(-1, 1)).sum(dim=0)
+
         # Update spatial concentration priors with the computed neighborhood expression
         # print(neighborhood_expression)
         spatial_concentration_priors[i] += neighborhood_expression
 
     # Normalize concentration priors
-    concentration_priors = torch.tensor(spatial_concentration_priors, dtype=torch.float64)
-    concentration_priors += torch.distributions.half_normal.HalfNormal(0.25).sample(concentration_priors.shape)
+    concentration_priors = spatial_concentration_priors
+    concentration_priors += torch.distributions.half_normal.HalfNormal(0.1).sample(concentration_priors.shape)
     concentration_priors /= concentration_priors.sum(dim=1, keepdim=True)
-    concentration_priors *= num_clusters * concentration_amplification
+    concentration_priors *= concentration_amplification
 
     sample_for_assignment_options = [False, True]
 
@@ -430,13 +411,11 @@ def Xenium_SVI(
             f"{bayxensmooth_clusters_filepath}/prior_result.png"
         )
 
-    PRIOR_SCALE = 100.0 # higher means weaker
-
     def model(data):
 
         # Define the means and variances of the Gaussian components
-        cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, PRIOR_SCALE).to_event(2))
+        cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, 1.0).to_event(2))
+        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 1.0).to_event(2))
 
         # Define priors for the cluster assignment probabilities and Gaussian parameters
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
@@ -453,15 +432,15 @@ def Xenium_SVI(
         # Global variational parameters for means and scales
         cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means)
         cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales, constraint=dist.constraints.positive)
-        cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, PRIOR_SCALE).to_event(2))
+        cluster_means = pyro.sample("cluster_means", dist.LogNormal(cluster_means_q, 1.0).to_event(2))
+        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(2))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
             batch_cluster_concentration_params_q = cluster_concentration_params_q[ind].clamp(min=MIN_CONCENTRATION)
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_cluster_concentration_params_q))
 
-    NUM_EPOCHS = 75
+    NUM_EPOCHS = 1000
     NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
 
     # Setup the optimizer
@@ -486,7 +465,7 @@ def Xenium_SVI(
             loss = svi.step(data)
             running_loss += loss / batch_size
         # svi.optim.step()
-        if epoch % 1 == 0:
+        if epoch % 5 == 0:
             print(f"Epoch {epoch} : loss = {round(running_loss/1e6, 4)}")
             cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive).clamp(min=MIN_CONCENTRATION)
             if sample_for_assignment:
@@ -495,13 +474,13 @@ def Xenium_SVI(
                 # the probs aren't sampled and we calculate the EV instead
                 cluster_probs_q = (cluster_concentration_params_q / cluster_concentration_params_q.sum(dim=1, keepdim=True))
             cluster_assignments_q = cluster_probs_q.argmax(dim=1)
-            # clusters = pd.DataFrame(cluster_assignments_q.cpu(), columns=["BayXenSmooth cluster"])
-            # morans_i_gene_dict = gene_morans_i(original_adata, spatial_locations, clusters["BayXenSmooth cluster"])
-            # # gearys_c_gene_dict = gene_gearys_c(original_adata, spatial_locations, clusters["BayXenSmooth cluster"])
-            # marker_genes = ["BANK1", "CEACAM6", "FASN", "FGL2", "IL7R", "KRT6B", "POSTN", "TCIM"]
-            # morans_i_markers = {k: v for k, v in morans_i_gene_dict.items() if k in marker_genes}
-            # # gearys_c_markers = {k: v for k, v in gearys_c_gene_dict.items() if k in marker_genes}
-            # print(morans_i_markers)
+            clusters = pd.DataFrame(cluster_assignments_q.cpu(), columns=["BayXenSmooth cluster"])
+            morans_i_gene_dict = gene_morans_i(original_adata, spatial_locations, clusters["BayXenSmooth cluster"])
+            # gearys_c_gene_dict = gene_gearys_c(original_adata, spatial_locations, clusters["BayXenSmooth cluster"])
+            marker_genes = ["BANK1", "CEACAM6", "FASN", "FGL2", "IL7R", "KRT6B", "POSTN", "TCIM"]
+            morans_i_markers = {k: v for k, v in morans_i_gene_dict.items() if k in marker_genes}
+            # gearys_c_markers = {k: v for k, v in gearys_c_gene_dict.items() if k in marker_genes}
+            print(morans_i_markers)
 
 
             if dataset_name == "DLPFC":
@@ -708,12 +687,11 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Xenium SVI with different arguments")
-    parser.add_argument("--kmeans_init", type=str2bool, required=False)
-    parser.add_argument("--custom_init", type=str, required=False)
+    parser.add_argument("--kmeans_init", type=str2bool, required=True)
     parser.add_argument("--neighborhood_size", type=int, required=True)
     parser.add_argument("--num_clusters", type=int, required=True)
     parser.add_argument("--spatial_init", type=str2bool, required=True)
-    parser.add_argument("--spatial_normalize", type=float, required=False)
+    parser.add_argument("--spatial_normalize", type=float, required=True)
     parser.add_argument("--concentration_amplification", type=float, required=True)
     parser.add_argument("--spot_size", type=int, required=True)
     parser.add_argument("--data_mode", type=str, required=True)
@@ -742,7 +720,7 @@ def main():
         )
     elif DATA_TYPE == "DLPFC":
         gene_data, spatial_locations, original_adata = prepare_DLPFC_data(
-            section_id=151673,
+            section_id=151507,
             num_pcs=args.num_pcs,
         )
 
@@ -762,7 +740,6 @@ def main():
         batch_size= 256 * int(2 ** ((100 / args.spot_size) - 1)), 
         concentration_amplification=args.concentration_amplification, 
         kmeans_init=args.kmeans_init,
-        custom_init=args.custom_init,
         neighborhood_size=args.neighborhood_size,
         spatial_init=args.spatial_init,
         spatial_normalize=args.spatial_normalize,
