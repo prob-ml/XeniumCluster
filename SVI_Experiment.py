@@ -17,7 +17,7 @@ argument_sets = [
             "neighborhood_agg": neighborhood_agg
         }
         for custom_init in ["Leiden", "K-Means"]
-        for concentration_amplification in [1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0]
+        for concentration_amplification in [1.0]
         for neighborhood_agg in ["sum", "mean"]
     ]
     for neighborhood_size in range(1, 6)

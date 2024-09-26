@@ -14,6 +14,7 @@ from typing import List
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from mclustpy import mclustpy
 
 class XeniumCluster:
 
@@ -430,3 +431,16 @@ class XeniumCluster:
             )
 
         return data.obs["cluster"].values.astype(int)
+    
+    def mclust(
+        self,
+        data: ad.AnnData,
+        G: int = 17,
+        model_name: str = "EEE"
+    ):
+        # Save the np array X_pca to a file
+        np.save("X_pca.npy", data.obsm["X_pca"])
+        print(data.obsm["X_pca"].shape)    
+        res = mclustpy(data.obsm["X_pca"], G=G, modelNames=model_name)
+        data.obs["cluster"] = res["classification"].astype(int)
+        return data.obs["cluster"].values

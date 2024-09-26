@@ -53,11 +53,6 @@ def record_results(original_data, cluster_dict, results_dir, model_name, filenam
     if not os.path.exists(dirpath):
         os.makedirs(dirpath)
 
-    filepath = f"{dirpath}/{filename}.json"
-
-    with open(filepath, "w") as f:
-        json.dump(cluster_dict[model_name], f, indent=4)
-
     wss = {}
     if resolution is not None:
         current_clustering = np.array(cluster_dict[model_name][spot_size][third_dim][num_pcs].get(
@@ -105,7 +100,7 @@ wss = {"BayesSpace": {}}
 results_dir = "results/hBreast"
 
 # %%
-PC_list = [15]
+PC_list = [3, 5, 10, 15, 25]
 
 # %%
 import matplotlib
@@ -123,8 +118,8 @@ for spot_size in [50, 75, 100]:
                     cluster_dict["BayesSpace"] = {}
                 if spot_size not in cluster_dict["BayesSpace"]:
                     cluster_dict["BayesSpace"][spot_size] = {}
-                if num_pcs not in cluster_dict["BayesSpace"][spot_size]:
-                    cluster_dict["BayesSpace"][spot_size][num_pcs] = {}
+                if third_dim not in cluster_dict["BayesSpace"][spot_size]:
+                    cluster_dict["BayesSpace"][spot_size][third_dim] = {}
                 cluster_dict["BayesSpace"][spot_size][third_dim][num_pcs] = {True: {K: BayesSpace_cluster.tolist()}}
                 record_results(original_data, cluster_dict, results_dir, "BayesSpace", cluster_results_filename, spot_size, third_dim, num_pcs, K, uses_spatial=True)
 

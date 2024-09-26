@@ -229,6 +229,8 @@ def Xenium_SVI(
             initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.75], save_plot=True, K=K)[0.75]
         elif method == "Louvain":
             initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=True, K=K)[1.0]
+        elif method == "mclust":
+            initial_clusters = original_adata.mclust(original_adata.xenium_spot_data, G=K, model_name = "EEE")
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -430,13 +432,13 @@ def Xenium_SVI(
             f"{bayxensmooth_clusters_filepath}/prior_result.png"
         )
 
-    PRIOR_SCALE = 100.0 # higher means weaker
+    PRIOR_SCALE = np.sqrt(10.0) # higher means weaker
 
     def model(data):
 
         # Define the means and variances of the Gaussian components
         cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, PRIOR_SCALE).to_event(2))
+        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 1.0).to_event(2))
 
         # Define priors for the cluster assignment probabilities and Gaussian parameters
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
@@ -454,14 +456,14 @@ def Xenium_SVI(
         cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means)
         cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales, constraint=dist.constraints.positive)
         cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, PRIOR_SCALE).to_event(2))
+        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(2))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
             batch_cluster_concentration_params_q = cluster_concentration_params_q[ind].clamp(min=MIN_CONCENTRATION)
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_cluster_concentration_params_q))
 
-    NUM_EPOCHS = 75
+    NUM_EPOCHS = 1000
     NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
 
     # Setup the optimizer
