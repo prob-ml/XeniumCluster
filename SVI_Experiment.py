@@ -16,7 +16,7 @@ argument_sets = [
             "hvg_var_prop": 0.9, 
             "neighborhood_agg": neighborhood_agg
         }
-        for custom_init in ["Leiden", "K-Means"]
+        for custom_init in ["mclust"]
         for concentration_amplification in [1.0]
         for neighborhood_agg in ["sum", "mean"]
     ]

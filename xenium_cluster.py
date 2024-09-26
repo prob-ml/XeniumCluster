@@ -382,6 +382,7 @@ class XeniumCluster:
     def BayesSpace(
         self,
         data: ad.AnnData,
+        init_method: str = "mclust",
         num_pcs: int = 15,
         K: int = 3,
         grid_search: bool = True,
@@ -398,9 +399,9 @@ class XeniumCluster:
             command = ["Rscript", script_path] + list(args)
             subprocess.run(command, check=True, capture_output=False)
 
-        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{num_pcs}", f"{K}")
+        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{init_method}", f"{num_pcs}", f"{K}")
 
-        target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{self.SPOT_SIZE}"
+        target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{init_method}/{self.SPOT_SIZE}"
         gammas = np.linspace(1, 3, 9) if grid_search else [2]
         for gamma in gammas:
             BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}_gamma={gamma}.csv", index_col=0)
@@ -438,9 +439,6 @@ class XeniumCluster:
         G: int = 17,
         model_name: str = "EEE"
     ):
-        # Save the np array X_pca to a file
-        np.save("X_pca.npy", data.obsm["X_pca"])
-        print(data.obsm["X_pca"].shape)    
         res = mclustpy(data.obsm["X_pca"], G=G, modelNames=model_name)
         data.obs["cluster"] = res["classification"].astype(int)
         return data.obs["cluster"].values

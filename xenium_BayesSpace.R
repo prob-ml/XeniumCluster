@@ -10,7 +10,7 @@ library(Matrix)
 
 # sce <- readVisium("data/sce")
 
-BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, num_pcs=15, K=NULL, grid_search=TRUE) {
+BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", num_pcs=15, K=NULL, grid_search=TRUE) {
 
   rowData <- read.csv(paste0("data/BayesSpace/rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
   colData <- read.csv(paste0("data/BayesSpace/colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
@@ -61,11 +61,11 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, num_pcs=15, K=NULL, gri
       q_optimal <- K
 
     sce <- spatialCluster(sce, q=q_optimal, platform="ST", d=num_pcs,
-                              init.method="mclust", model="t", gamma=gamma,
+                              init.method=init_method, model="t", gamma=gamma,
                               nrep=1000, burn.in=100,
                               save.chain=TRUE)
     
-    dir_path <- paste0("results/", dataset, "/BayesSpace/", num_pcs, "/", q_optimal, "/clusters/", SPOT_SIZE)
+    dir_path <- paste0("results/", dataset, "/BayesSpace/", num_pcs, "/", q_optimal, "/clusters/", init_method, "/", SPOT_SIZE)
     if (!dir.exists(dir_path)) {
       dir.create(dir_path, recursive = TRUE)
     }
@@ -85,7 +85,8 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, num_pcs=15, K=NULL, gri
 args <- commandArgs(trailingOnly = TRUE)
 dataset_name <- args[1]
 SPOT_SIZE <- as.numeric(args[2])
-num_pcs <- as.numeric(args[3])
-K <- ifelse(length(args) > 3, as.numeric(args[4]), NULL)
+init_method <- as.numeric(args[3])
+num_pcs <- as.numeric(args[4])
+K <- ifelse(length(args) > 4, as.numeric(args[5]), NULL)
 cat(c(SPOT_SIZE, num_pcs, K))
-BayesSpace(dataset_name, SPOT_SIZE, num_pcs, K)
+BayesSpace(dataset_name, SPOT_SIZE, init_method, num_pcs, K)
