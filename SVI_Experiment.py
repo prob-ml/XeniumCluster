@@ -16,12 +16,12 @@ argument_sets = [
             "hvg_var_prop": 0.9, 
             "neighborhood_agg": neighborhood_agg
         }
-        for custom_init in ["mclust"]
-        for concentration_amplification in [1.0]
+        for custom_init in ["mclust", "K-Means", "Leiden"]
+        for concentration_amplification in [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0]
         for neighborhood_agg in ["sum", "mean"]
     ]
     for neighborhood_size in range(1, 6)
-    for num_pcs in [3]
+    for num_pcs in [3, 5, 10, 15, 25]
 ]
 
 # Function to format arguments into a command string

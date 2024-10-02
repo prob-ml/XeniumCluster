@@ -230,6 +230,7 @@ def Xenium_SVI(
         elif method == "Louvain":
             initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=True, K=K)[1.0]
         elif method == "mclust":
+            original_adata.pca(original_adata.xenium_spot_data, num_pcs)
             initial_clusters = original_adata.mclust(original_adata.xenium_spot_data, G=K, model_name = "EEE")
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -252,6 +253,8 @@ def Xenium_SVI(
     # Clamping
     MIN_CONCENTRATION = 0.1
 
+    num_posterior_samples = 100
+
     spatial_init_data = StandardScaler().fit_transform(gene_data)
     gene_data = StandardScaler().fit_transform(gene_data)
     empirical_prior_means = torch.ones(num_clusters, spatial_init_data.shape[1])
@@ -268,7 +271,6 @@ def Xenium_SVI(
         if custom_init:
 
             initial_clusters = custom_cluster_initialization(original_adata, custom_init)
-            concentration_priors = torch.tensor(pd.get_dummies(initial_clusters, dtype=float).to_numpy())
 
         elif kmeans_init:
 
@@ -345,13 +347,14 @@ def Xenium_SVI(
             with open(f"{kmeans_cluster_metrics_filepath}/wss.json", 'w') as fp:
                 json.dump(cluster_metrics, fp)
 
-        concentration_priors = torch.tensor(pd.get_dummies(initial_clusters, dtype=float).to_numpy())
+        concentration_priors = torch.zeros((initial_clusters.shape[0], num_clusters))
+        concentration_priors[torch.arange(initial_clusters.shape[0]), initial_clusters - 1] = 1.
 
     else:
 
         concentration_priors = torch.ones((len(gene_data), num_clusters), dtype=float)
 
-    concentration_w_locations = torch.cat((torch.tensor(spatial_locations.to_numpy()), concentration_priors), dim=1)
+    locations_tensor = torch.tensor(spatial_locations.to_numpy())
 
     # Clone to avoid modifying the original tensor
     spatial_concentration_priors = concentration_priors.clone()
@@ -362,8 +365,8 @@ def Xenium_SVI(
     # Initialize an empty tensor for spatial concentration priors
     spatial_concentration_priors =  spatial_concentration_priors = torch.zeros_like(concentration_priors, dtype=torch.float64)
 
-    spot_locations = KDTree(concentration_w_locations[:, :2].cpu())  # Ensure this tensor is in host memory
-    neighboring_spot_indexes = spot_locations.query_ball_point(concentration_w_locations[:, :2].cpu(), r=neighborhood_size, p=1, workers=8)
+    spot_locations = KDTree(locations_tensor.cpu())  # Ensure this tensor is in host memory
+    neighboring_spot_indexes = spot_locations.query_ball_point(locations_tensor.cpu(), r=neighborhood_size, p=1, workers=8)
 
     # Iterate over each spot
     for i in tqdm(range(num_spots)):
@@ -402,7 +405,7 @@ def Xenium_SVI(
     for sample_for_assignment in sample_for_assignment_options:
 
         if sample_for_assignment:
-            cluster_probs_prior_TRUE = dist.Dirichlet(concentration_priors).sample()
+            cluster_probs_prior_TRUE = pyro.sample("cluster_probs", dist.Dirichlet(concentration_priors).expand_by([num_posterior_samples])).detach().mean(dim=0)
             cluster_assignments_prior = cluster_probs_prior_TRUE.argmax(dim=1)  
         else:
             # the probs aren't sampled and we calculate the EV instead
@@ -432,38 +435,60 @@ def Xenium_SVI(
             f"{bayxensmooth_clusters_filepath}/prior_result.png"
         )
 
-    PRIOR_SCALE = np.sqrt(10.0) # higher means weaker
+    PRIOR_SCALE = np.sqrt(1.0) # higher means weaker
+    NUM_PARTICLES = 25
+
+    expected_total_param_dim = 2 # K x D
 
     def model(data):
 
-        # Define the means and variances of the Gaussian components
-        cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 1.0).to_event(2))
+        with pyro.plate("clusters", num_clusters):
+
+            # Define the means and variances of the Gaussian components
+            cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, PRIOR_SCALE).to_event(1))
+            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 1.0).to_event(1))
 
         # Define priors for the cluster assignment probabilities and Gaussian parameters
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
             batch_data = data[ind]
             batch_concentration_priors = concentration_priors[ind]
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_concentration_priors))
-            # Likelihood of data given cluster assignments
-            for i in range(cluster_probs.size(0)):
-                pyro.sample(f"obs_{i}", dist.MixtureOfDiagNormals(cluster_means, cluster_scales, cluster_probs[i]), obs=batch_data[i])
+            # likelihood for batch
+            if cluster_means.dim() == expected_total_param_dim:
+                pyro.sample(f"obs", dist.MixtureOfDiagNormals(
+                        cluster_means.unsqueeze(0).expand(batch_size, -1, -1), 
+                        cluster_scales.unsqueeze(0).expand(batch_size, -1, -1), 
+                        cluster_probs
+                    ), 
+                    obs=batch_data
+                )
+            # likelihood for batch WITH vectorization of particles
+            else:
+                pyro.sample(f"obs", dist.MixtureOfDiagNormals(
+                        cluster_means.unsqueeze(1).expand(-1, batch_size, -1, -1), 
+                        cluster_scales.unsqueeze(1).expand(-1, batch_size, -1, -1), 
+                        cluster_probs
+                    ), 
+                    obs=batch_data
+                )
 
     def guide(data):
         # Initialize cluster assignment probabilities for the entire dataset
         cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive).clamp(min=MIN_CONCENTRATION)
-        # Global variational parameters for means and scales
-        cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means)
-        cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales, constraint=dist.constraints.positive)
-        cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, PRIOR_SCALE).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(2))
+        
+        with pyro.plate("clusters", num_clusters):
+            # Global variational parameters for means and scales
+            cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means)
+            cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales, constraint=dist.constraints.positive)
+            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, 1.0).to_event(1))
+            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(1))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
             batch_cluster_concentration_params_q = cluster_concentration_params_q[ind].clamp(min=MIN_CONCENTRATION)
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_cluster_concentration_params_q))
 
-    NUM_EPOCHS = 1000
+    NUM_EPOCHS = 75
     NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
 
     # Setup the optimizer
@@ -471,7 +496,7 @@ def Xenium_SVI(
     scheduler = PyroOptim(Adam, adam_params)
 
     # Setup the inference algorithm
-    svi = SVI(model, guide, scheduler, loss=TraceMeanField_ELBO(num_particles=10, vectorize_particles=True))
+    svi = SVI(model, guide, scheduler, loss=TraceMeanField_ELBO(num_particles=NUM_PARTICLES, vectorize_particles=True))
 
     # Create a DataLoader for the data
     # Convert data to CUDA tensors before creating the DataLoader
@@ -524,7 +549,6 @@ def Xenium_SVI(
     torch.set_default_tensor_type(torch.FloatTensor)
 
     # Grab the learned variational parameters
-    num_posterior_samples = 100
     sample_for_assignment_options = [False, True]
 
     for sample_for_assignment in sample_for_assignment_options:

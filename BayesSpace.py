@@ -125,7 +125,7 @@ for spot_size in [50, 75, 100]:
                     if init_method not in cluster_dict["BayesSpace"][spot_size][third_dim]:
                         cluster_dict["BayesSpace"][spot_size][third_dim][init_method] = {}
                     cluster_dict["BayesSpace"][spot_size][third_dim][init_method][num_pcs] = {True: {K: BayesSpace_cluster.tolist()}}
-                    record_results(original_data, cluster_dict, results_dir, "BayesSpace", cluster_results_filename, spot_size, third_dim, num_pcs, K, uses_spatial=True)
+                    record_results(original_data, cluster_dict, results_dir, "BayesSpace", cluster_results_filename, spot_size, third_dim, num_pcs, init_method, K, uses_spatial=True)
 
 # %%
 spot_sizes = [50, 75, 100]

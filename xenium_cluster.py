@@ -404,7 +404,7 @@ class XeniumCluster:
         target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{init_method}/{self.SPOT_SIZE}"
         gammas = np.linspace(1, 3, 9) if grid_search else [2]
         for gamma in gammas:
-            BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}_gamma={gamma}.csv", index_col=0)
+            BayesSpace_clusters = pd.read_csv(f"{target_dir}/clusters_K={K}_gamma={gamma:.2f}.csv", index_col=0)
             data.obs["cluster"] = np.array(BayesSpace_clusters["BayesSpace cluster"])
             # Extracting row, col, and cluster values from the dataframe
             rows = torch.tensor(data.obs["row"].astype(int))

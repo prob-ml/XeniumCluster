@@ -85,7 +85,7 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
 args <- commandArgs(trailingOnly = TRUE)
 dataset_name <- args[1]
 SPOT_SIZE <- as.numeric(args[2])
-init_method <- as.numeric(args[3])
+init_method <- args[3]
 num_pcs <- as.numeric(args[4])
 K <- ifelse(length(args) > 4, as.numeric(args[5]), NULL)
 cat(c(SPOT_SIZE, num_pcs, K))
