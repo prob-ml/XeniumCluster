@@ -2,6 +2,7 @@
 import pandas as pd
 import json
 import os
+import torch
 
 import warnings 
 warnings.filterwarnings("ignore")
@@ -53,46 +54,42 @@ def record_results(original_data, cluster_dict, results_dir, model_name, filenam
     if not os.path.exists(dirpath):
         os.makedirs(dirpath)
 
-    wss = {}
-    if resolution is not None:
-        current_clustering = np.array(cluster_dict[model_name][spot_size][third_dim][init_method][num_pcs].get(
-            resolution, 
-            cluster_dict[model_name][spot_size][third_dim][init_method][num_pcs]
-        ))
-    else:
-        current_clustering = np.array(cluster_dict[model_name][spot_size][third_dim][init_method][num_pcs][uses_spatial].get(
-            K, 
-            cluster_dict[model_name][spot_size][third_dim][init_method][num_pcs][uses_spatial]
-        ))
-    cluster_labels = np.unique(current_clustering)
+    for gamma in np.linspace(1, 3, 9):
+        gamma_str = f"{gamma:.2f}"
+        try:
+            current_clustering = pd.read_csv(f"{dirpath}/{gamma_str}/{filename}.csv", index_col=0)["BayesSpace cluster"].values
 
-    original_data.xenium_spot_data.obs[f"{model_name} cluster"] = np.array(current_clustering)
-    # Extracting row, col, and cluster values from the dataframe
-    rows = torch.tensor(original_data.xenium_spot_data.obs["row"].astype(int))
-    cols = torch.tensor(original_data.xenium_spot_data.obs["col"].astype(int))
-    clusters = torch.tensor(original_data.xenium_spot_data.obs[f"{model_name} cluster"].astype(int))
-    cluster_labels = np.unique(clusters)
-    num_clusters = len(cluster_labels)
+            original_data.xenium_spot_data.obs[f"{model_name} cluster"] = current_clustering
+            # Extracting row, col, and cluster values from the dataframe
+            rows = torch.tensor(original_data.xenium_spot_data.obs["row"].astype(int))
+            cols = torch.tensor(original_data.xenium_spot_data.obs["col"].astype(int))
+            clusters = torch.tensor(original_data.xenium_spot_data.obs[f"{model_name} cluster"].astype(int))
+            cluster_labels = np.unique(clusters)
+            num_clusters = len(cluster_labels)
 
-    num_rows = int(max(rows) - min(rows) + 1)
-    num_cols = int(max(cols) - min(cols) + 1)
+            num_rows = int(max(rows) - min(rows) + 1)
+            num_cols = int(max(cols) - min(cols) + 1)
 
-    cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
+            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-    cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
+            
+            wss = {}
+            for label in cluster_labels:
+                current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
+                wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
+                print(f"POSSIBLE {len(cluster_labels)}", label, wss[f"Cluster {label}"])
 
-    for label in cluster_labels:
-        current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
-        wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
-        print(f"POSSIBLE {len(cluster_labels)}", label, wss[f"Cluster {label}"])
+            wss_dirpath = f"{results_dir}/{model_name}/{num_pcs}/{(str(resolution) if resolution is not None else str(K))}/wss/{init_method}/{spot_size}"
+            if not os.path.exists(wss_dirpath):
+                os.makedirs(wss_dirpath)
 
-    wss_dirpath = f"{results_dir}/{model_name}/{num_pcs}/{(str(resolution) if resolution is not None else str(K))}/wss/{spot_size}/"
-    if not os.path.exists(wss_dirpath):
-        os.makedirs(wss_dirpath)
+            wss_filepath = f"{wss_dirpath}/{gamma_str}/{filename}_wss.json"
+            with open(wss_filepath, "w") as f:
+                json.dump(wss, f, indent=4)
 
-    wss_filepath = f"{wss_dirpath}/{filename}_wss.json"
-    with open(wss_filepath, "w") as f:
-        json.dump(wss, f, indent=4)
+        except:
+            continue
 
 # %%
 cluster_dict = {"BayesSpace": {}}
@@ -101,7 +98,7 @@ results_dir = "results/hBreast"
 
 # %%
 PC_list = [3, 5, 10, 15, 25]
-init_methods = ["kmeans", "mclust"]
+init_methods = ["mclust", "kmeans"]
 
 # %%
 import matplotlib
@@ -134,11 +131,15 @@ method="BayesSpace"
 for spot_size in spot_sizes:
     for K in [17]:
         for init_method in init_methods:
-            filename = f"results/hBreast/{method}/{K}/wss/{init_method}/{spot_size}/{cluster_results_filename}_wss.json"
-            if os.path.exists(filename):
-                with open(filename, "r") as wss_dict:
-                    current_wss = json.load(wss_dict)
-                print("Method:", method, "Spot Size", spot_size, "Num Clusters:", len(current_wss), "Initial Method:", init_method, "Total WSS:", sum(current_wss.values()) / in_billions)
+            for num_pcs in PC_list:
+                for gamma in np.linspace(1, 3, 9):
+                    gamma_str = f"{gamma:.2f}"
+                    cluster_results_filename = f"clusters_K={K}"
+                    filename = f"results/hBreast/{method}/{num_pcs}/{K}/wss/{init_method}/{spot_size}/{gamma_str}/{cluster_results_filename}_wss.json"
+                    if os.path.exists(filename):
+                        with open(filename, "r") as wss_dict:
+                            current_wss = json.load(wss_dict)
+                        print("Method:", method, "Spot Size", spot_size, "Num Clusters:", len(current_wss), "Num PCs", num_pcs, "\u03B3", f": {gamma_str}", "Initial Method:", init_method, "Total WSS:", sum(current_wss.values()) / in_billions)
 
 # %%
 

@@ -7,7 +7,7 @@ import math
 from tqdm import tqdm
 from pyro.infer import SVI, Trace_ELBO, TraceMeanField_ELBO
 from pyro.optim import PyroOptim
-from torch.optim import Adam
+from pyro.optim import Adam
 import pyro.distributions as dist
 import numpy as np
 import matplotlib.pyplot as plt
@@ -200,10 +200,7 @@ def Xenium_SVI(
         num_pcs=5,
         hvg_var_prop=0.5,
         dataset_name="hBreast",
-        kmeans_init=True,
         custom_init=False,
-        spatial_init=True,
-        spatial_normalize=1.0,
         num_clusters=6, 
         batch_size=512,
         neighborhood_size=2,
@@ -212,6 +209,10 @@ def Xenium_SVI(
         uncertainty_values = [0.25, 0.5, 0.75, 0.9, 0.99],
         evaluate_markers=True, 
         num_posterior_samples=100,
+        mu_prior_scale=1.0,
+        sigma_prior_scale=1.0,
+        mu_q_scale=1.0,
+        sigma_q_scale=0.1
     ):
 
     print(f"Batch Size is {batch_size}.")
@@ -241,9 +242,11 @@ def Xenium_SVI(
 
         total_file_path = (
             f"results/{dataset_name}/{model}/{component}/{data_file_path}/"
-            f"INIT={custom_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}"
-            f"/SPATIALINIT={spatial_init}/SAMPLEFORASSIGNMENT={sample_for_assignment}"
-            f"/SPATIALNORM={spatial_normalize}/SPATIALPRIORMULT={concentration_amplification}/SPOTSIZE={spot_size}/AGG={neighborhood_agg}"
+            f"INIT={custom_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}/"
+            f"/SAMPLEFORASSIGNMENT={sample_for_assignment}/"
+            f"/SPATIALPRIORMULT={concentration_amplification}/"
+            f"SPOTSIZE={spot_size}/AGG={neighborhood_agg}/"
+            f"MU_PRIOR={mu_prior_scale}/SIGMA_PRIOR={sigma_prior_scale}/MU_Q={mu_q_scale}/SIGMA_Q={sigma_q_scale}"
         )
 
         return total_file_path
@@ -266,31 +269,9 @@ def Xenium_SVI(
     num_rows = max(rows) + 1
     num_cols = max(columns) + 1
 
-    if custom_init or kmeans_init:
+    if custom_init:
 
-        if custom_init:
-
-            initial_clusters = custom_cluster_initialization(original_adata, custom_init)
-
-        elif kmeans_init:
-
-            kmeans_init_data = np.concatenate((spatial_locations, original_adata.xenium_spot_data.X), axis=1)
-            kmeans_init_data = StandardScaler().fit_transform(kmeans_init_data)
-
-            if spatial_normalize:
-
-                spatial_dim = spatial_locations.shape[1]
-                gene_dim = original_adata.xenium_spot_data.X.shape[1]
-                spatial_factor = (gene_dim * spatial_normalize / (spatial_dim * (1 - spatial_normalize))) ** 0.5
-                kmeans_init_data[:, :spatial_locations.shape[1]] *= spatial_factor
-
-            kmeans = KMeans(n_clusters=num_clusters).fit(kmeans_init_data)
-
-            initial_clusters = kmeans.predict(kmeans_init_data)
-
-            for i in range(num_clusters):
-                empirical_prior_means[i] = torch.tensor(gene_data[initial_clusters == i].mean(axis=0))
-                empirical_prior_scales[i] = torch.tensor(gene_data[initial_clusters == i].std(axis=0))
+        initial_clusters = custom_cluster_initialization(original_adata, custom_init)
 
         match data_mode:
             case "PCA":
@@ -301,26 +282,6 @@ def Xenium_SVI(
                 data_file_path = f"{data_mode}"
             case _:
                 raise ValueError("The data mode specified is not supported.")
-            
-        if kmeans_init and not custom_init:
-
-            if not os.path.exists(kmeans_clusters_filepath := save_filepath("KMeans", "clusters")):
-                os.makedirs(kmeans_clusters_filepath)
-            _ = plt.savefig(
-                f"{kmeans_clusters_filepath}/result.png"
-            )
-
-            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
-            
-            cluster_grid[rows, columns] = torch.tensor(initial_clusters, dtype=torch.int) + 1
-
-            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
-            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
-
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-            plt.title('Cluster Assignment with KMeans')
 
         if dataset_name == "DLPFC":
             # Create a DataFrame for easier handling
@@ -356,14 +317,11 @@ def Xenium_SVI(
 
     locations_tensor = torch.tensor(spatial_locations.to_numpy())
 
-    # Clone to avoid modifying the original tensor
-    spatial_concentration_priors = concentration_priors.clone()
-
     # Compute the number of elements in each dimension
     num_spots = concentration_priors.shape[0]
 
     # Initialize an empty tensor for spatial concentration priors
-    spatial_concentration_priors =  spatial_concentration_priors = torch.zeros_like(concentration_priors, dtype=torch.float64)
+    spatial_concentration_priors = torch.zeros_like(concentration_priors, dtype=torch.float64)
 
     spot_locations = KDTree(locations_tensor.cpu())  # Ensure this tensor is in host memory
     neighboring_spot_indexes = spot_locations.query_ball_point(locations_tensor.cpu(), r=neighborhood_size, p=1, workers=8)
@@ -435,9 +393,7 @@ def Xenium_SVI(
             f"{bayxensmooth_clusters_filepath}/prior_result.png"
         )
 
-    PRIOR_SCALE = np.sqrt(1.0) # higher means weaker
     NUM_PARTICLES = 25
-
     expected_total_param_dim = 2 # K x D
 
     def model(data):
@@ -445,8 +401,8 @@ def Xenium_SVI(
         with pyro.plate("clusters", num_clusters):
 
             # Define the means and variances of the Gaussian components
-            cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, PRIOR_SCALE).to_event(1))
-            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 1.0).to_event(1))
+            cluster_means = pyro.sample("cluster_means", dist.Normal(empirical_prior_means, 0.1).to_event(1))
+            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(empirical_prior_scales, 0.1).to_event(1))
 
         # Define priors for the cluster assignment probabilities and Gaussian parameters
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
@@ -474,26 +430,33 @@ def Xenium_SVI(
 
     def guide(data):
         # Initialize cluster assignment probabilities for the entire dataset
-        cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive).clamp(min=MIN_CONCENTRATION)
+        cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors + torch.abs(torch.randn_like(concentration_priors)), constraint=dist.constraints.positive).clamp(min=MIN_CONCENTRATION)
         
         with pyro.plate("clusters", num_clusters):
             # Global variational parameters for means and scales
-            cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means)
-            cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales, constraint=dist.constraints.positive)
-            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, 1.0).to_event(1))
-            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(1))
+            cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means + torch.randn_like(empirical_prior_means) * 0.05)
+            cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales + torch.randn_like(empirical_prior_scales) * 0.01, constraint=dist.constraints.positive)     
+            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, 0.5).to_event(1))
+            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 0.25).to_event(1))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
             batch_cluster_concentration_params_q = cluster_concentration_params_q[ind].clamp(min=MIN_CONCENTRATION)
             cluster_probs = pyro.sample("cluster_probs", dist.Dirichlet(batch_cluster_concentration_params_q))
 
-    NUM_EPOCHS = 75
+    NUM_EPOCHS = 125
     NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
 
     # Setup the optimizer
-    adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
-    scheduler = PyroOptim(Adam, adam_params)
+    def per_param_callable(param_name):
+        if param_name == 'cluster_means_q':
+            return {"lr": 0.0005, "betas": (0.9, 0.999)}
+        elif param_name == 'cluster_scales_q':
+            return {"lr": 0.0001, "betas": (0.9, 0.999)}
+        else:
+            return {"lr": 0.01}
+
+    scheduler = Adam(per_param_callable)
 
     # Setup the inference algorithm
     svi = SVI(model, guide, scheduler, loss=TraceMeanField_ELBO(num_particles=NUM_PARTICLES, vectorize_particles=True))
@@ -506,15 +469,19 @@ def Xenium_SVI(
     pyro.clear_param_store()
 
     epoch_pbar = tqdm(range(NUM_EPOCHS))
+    current_min_loss = float('inf')
+    PATIENCE = 5
+    patience_counter = 0
     for epoch in epoch_pbar:
         epoch_pbar.set_description(f"Epoch {epoch}")
         running_loss = 0.0
         for step in range(NUM_BATCHES):
             loss = svi.step(data)
             running_loss += loss / batch_size
+            # running_loss += (loss + SPATIAL_PENALTY_WEIGHT * spatial_penalty()) / batch_size
         # svi.optim.step()
         if epoch % 1 == 0:
-            print(f"Epoch {epoch} : loss = {round(running_loss/1e6, 4)}")
+            print(f"Epoch {epoch} : loss = {round(running_loss, 4)}")
             cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive).clamp(min=MIN_CONCENTRATION)
             if sample_for_assignment:
                 cluster_probs_q = pyro.sample("cluster_probs", dist.Dirichlet(cluster_concentration_params_q, validate_args=True)).detach()     
@@ -734,18 +701,19 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Xenium SVI with different arguments")
-    parser.add_argument("--kmeans_init", type=str2bool, required=False)
     parser.add_argument("--custom_init", type=str, required=False)
     parser.add_argument("--neighborhood_size", type=int, required=True)
     parser.add_argument("--num_clusters", type=int, required=True)
-    parser.add_argument("--spatial_init", type=str2bool, required=True)
-    parser.add_argument("--spatial_normalize", type=float, required=False)
     parser.add_argument("--concentration_amplification", type=float, required=True)
     parser.add_argument("--spot_size", type=int, required=True)
     parser.add_argument("--data_mode", type=str, required=True)
     parser.add_argument("--num_pcs", type=int, required=True)
     parser.add_argument("--hvg_var_prop", type=float, required=True)
     parser.add_argument("--neighborhood_agg", type=str, required=True)
+    parser.add_argument("--mu_prior_scale", type=float, required=False)
+    parser.add_argument("--sigma_prior_scale", type=float, required=False)
+    parser.add_argument("--mu_q_scale", type=float, required=False)
+    parser.add_argument("--sigma_q_scale", type=float, required=False)
     return parser.parse_args()
 
 def main():
@@ -787,12 +755,13 @@ def main():
         num_clusters=args.num_clusters, 
         batch_size= 256 * int(2 ** ((100 / args.spot_size) - 1)), 
         concentration_amplification=args.concentration_amplification, 
-        kmeans_init=args.kmeans_init,
         custom_init=args.custom_init,
         neighborhood_size=args.neighborhood_size,
-        spatial_init=args.spatial_init,
-        spatial_normalize=args.spatial_normalize,
-        neighborhood_agg=args.neighborhood_agg
+        neighborhood_agg=args.neighborhood_agg,
+        mu_prior_scale=args.mu_prior_scale,
+        sigma_prior_scale=args.sigma_prior_scale,
+        mu_q_scale=args.mu_q_scale,
+        sigma_q_scale=args.sigma_q_scale,
     )
 
     sample_for_assignment_options = [False, True]
@@ -828,15 +797,61 @@ def main():
 
             total_file_path = (
                 f"results/{dataset_name}/{args.model}/{args.component}/{data_file_path}/"
-                f"KMEANSINIT={args.kmeans_init}/NEIGHBORSIZE={args.neighborhood_size}/NUMCLUSTERS={args.num_clusters}"
-                f"/SPATIALINIT={args.spatial_init}/SAMPLEFORASSIGNMENT={sample_for_assignment}"
-                f"/SPATIALNORM={args.spatial_normalize}/SPATIALPRIORMULT={args.concentration_amplification}/SPOTSIZE={args.spot_size}/AGG={args.neighborhood_agg}"
+                f"NEIGHBORSIZE={args.neighborhood_size}/NUMCLUSTERS={args.num_clusters}"
+                f"/SAMPLEFORASSIGNMENT={sample_for_assignment}"
+                f"/SPATIALPRIORMULT={args.concentration_amplification}/SPOTSIZE={args.spot_size}/AGG={args.neighborhood_agg}"
             )
 
             if not os.path.exists(total_file_path):
                 os.makedirs(total_file_path)
             with open(f"{total_file_path}/cluster_metrics.json", 'w') as fp:
                 json.dump(cluster_metrics, fp)
+
+def main_test():
+    DATA_TYPE = "XENIUM"
+
+    if DATA_TYPE == "XENIUM":
+        # Call prepare_Xenium_data with the appropriate arguments
+        gene_data, spatial_locations, original_adata = prepare_Xenium_data(
+            dataset="hBreast", 
+            spots=True, 
+            spot_size=50, 
+            third_dim=False, 
+            log_normalize=True, 
+            likelihood_mode="PCA", 
+            num_pcs=3,
+            hvg_var_prop=0.9,
+            min_expressions_per_spot=0
+        )
+    elif DATA_TYPE == "DLPFC":
+        gene_data, spatial_locations, original_adata = prepare_DLPFC_data(
+            section_id=151673,
+            num_pcs=3,
+        )
+
+    print("Data Completed")
+    
+    # Call Xenium_SVI with the appropriate arguments
+    cluster_concentration_params_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+        gene_data, 
+        spatial_locations,
+        original_adata,
+        data_mode="PCA",
+        num_pcs=3,
+        hvg_var_prop=0.9, 
+        dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
+        spot_size=50, 
+        num_clusters=17, 
+        batch_size= 256 * int(2 ** ((100 / 50) - 1)), 
+        concentration_amplification=1.0, 
+        custom_init="mclust",
+        neighborhood_size=1,
+        neighborhood_agg="mean",
+        mu_prior_scale=1,
+        sigma_prior_scale=1,
+        mu_q_scale=1,
+        sigma_q_scale=1,
+    )
 
 if __name__ == "__main__":
     main()

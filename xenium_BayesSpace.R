@@ -65,13 +65,13 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
                               nrep=1000, burn.in=100,
                               save.chain=TRUE)
     
-    dir_path <- paste0("results/", dataset, "/BayesSpace/", num_pcs, "/", q_optimal, "/clusters/", init_method, "/", SPOT_SIZE)
+    dir_path <- paste0("results/", dataset, "/BayesSpace/", num_pcs, "/", q_optimal, "/clusters/", init_method, "/", SPOT_SIZE, "/", format(gamma, nsmall = 2))
     if (!dir.exists(dir_path)) {
       dir.create(dir_path, recursive = TRUE)
     }
     cluster_data <- data.frame(sce$spatial.cluster)
     colnames(cluster_data) <- c("BayesSpace cluster")
-    write.csv(cluster_data, paste0(dir_path, "/clusters_K=", q_optimal, "_gamma=", format(gamma, nsmall = 2), ".csv"), row.names = TRUE)
+    write.csv(cluster_data, paste0(dir_path, "/clusters_K=", q_optimal, ".csv"), row.names = TRUE)
     
     clusterPlot(sce, palette=c("purple", "red", "blue", "yellow"), color="black") +
       theme_bw() +
