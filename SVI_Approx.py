@@ -383,7 +383,7 @@ def Xenium_SVI(
     for sample_for_assignment in sample_for_assignment_options:
 
         if sample_for_assignment:
-            cluster_assignments_prior_TRUE = pyro.sample("cluster_assignments", dist.Categorical(spatial_cluster_probs_prior).expand_by([num_prior_samples])).detach().mode(dim=0).values
+            cluster_assignments_prior_TRUE = pyro.sample("cluster_assignments", dist.Categorical(spatial_cluster_probs_prior).expand_by([num_prior_samples])).mode(dim=0).values
             cluster_assignments_prior = cluster_assignments_prior_TRUE
         else:
             cluster_assignments_prior_FALSE = spatial_cluster_probs_prior.argmax(dim=1)
@@ -554,7 +554,6 @@ def Xenium_SVI(
         if sample_for_assignment:
             cluster_probs_q = torch.softmax(pyro.sample("cluster_probs", dist.Normal(cluster_logits_q_mean, cluster_logits_q_scale).expand_by([num_posterior_samples]).to_event(1)).mean(dim=0), dim=-1)
             cluster_assignments_q = pyro.sample("cluster_assignments", dist.Categorical(cluster_probs_q).expand_by([num_posterior_samples])).mode(dim=0).values
-            print(cluster_assignments_q[0])
             cluster_assignments_prior = cluster_assignments_prior_TRUE
         else:
             cluster_probs_q = torch.softmax(cluster_logits_q_mean, dim=-1)
@@ -619,7 +618,6 @@ def Xenium_SVI(
             for label in range(1, num_clusters + 1):
                 current_cluster_locations = torch.stack(torch.where((cluster_grid.cpu() == label)), axis=1).to(float)
                 wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
-            print("WSS", sum(wss.values()) / 1_000_000)
 
             if not os.path.exists(bayxensmooth_wss_filepath := save_filepath("BayXenSmooth", "wss", sample_for_assignment)):
                 os.makedirs(bayxensmooth_wss_filepath)
@@ -640,7 +638,6 @@ def Xenium_SVI(
                     
                     # Efficiently extract the rows for the current cluster using fancy indexing
                     expressions = original_adata.xenium_spot_data.X[current_cluster_indexes, :]
-                    print(label, expressions.shape)
                     
                     # Compute mean expressions; the result is still a csr_matrix
                     mean_expressions = expressions.mean(axis=0)
@@ -879,7 +876,7 @@ def main_test():
     )
 
 if __name__ == "__main__":
-    main_test()
+    main()
 
 
 
