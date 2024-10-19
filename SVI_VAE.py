@@ -356,10 +356,10 @@ def Xenium_SVI(
         # Initialize cluster assignment probabilities for the entire dataset
         cluster_concentration_params_q = pyro.param("cluster_concentration_params_q", concentration_priors, constraint=dist.constraints.positive) + MIN_CONCENTRATION
         # Global variational parameters for means and scales
-        cluster_means_q = pyro.param("cluster_means_q", torch.ones(num_clusters, data.size(1)), constraint=dist.constraints.positive)
-        cluster_scales_q = pyro.param("cluster_scales_q", torch.ones(num_clusters, data.size(1)), constraint=dist.constraints.positive)
-        cluster_means = pyro.sample("cluster_means", dist.LogNormal(cluster_means_q, 1.0).to_event(2))
-        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 1.0).to_event(2))
+        cluster_means_q_mean = pyro.param("cluster_means_q_mean", torch.ones(num_clusters, data.size(1)), constraint=dist.constraints.positive)
+        cluster_scales_q_mean = pyro.param("cluster_scales_q_mean", torch.ones(num_clusters, data.size(1)), constraint=dist.constraints.positive)
+        cluster_means = pyro.sample("cluster_means", dist.LogNormal(cluster_means_q_mean, 1.0).to_event(2))
+        cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q_mean, 1.0).to_event(2))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
             batch_data = data[ind]
@@ -414,8 +414,8 @@ def Xenium_SVI(
     cluster_assignments_q = cluster_probs_q.argmax(dim=1)
     
     cluster_concentration_params_q = cluster_concentration_params_q.detach()
-    cluster_means_q = pyro.param("cluster_means_q").detach()
-    cluster_scales_q = pyro.param("cluster_scales_q").detach()
+    cluster_means_q_mean = pyro.param("cluster_means_q_mean").detach()
+    cluster_scales_q_mean = pyro.param("cluster_scales_q_mean").detach()
 
     # Plotting
     if spot_size:
@@ -567,7 +567,7 @@ def Xenium_SVI(
             f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}.png"
         )
 
-    return cluster_concentration_params_q, cluster_means_q, cluster_scales_q
+    return cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q
 
 
 def str2bool(v):
@@ -621,7 +621,7 @@ def main():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_concentration_params_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+    cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,

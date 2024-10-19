@@ -7,16 +7,15 @@ parameter_grid = {
     "custom_init": ["mclust", "K-Means", "Leiden"],
     "neighborhood_size": range(1, 5),
     "num_clusters": [17],
-    "spot_size": [50],
+    "spot_size": [25, 50, 75, 100],
     "num_pcs": [3, 5, 10, 15, 25],
     "data_mode": ["PCA"],
     "hvg_var_prop": [0.9],
     "neighborhood_agg": ["mean"],
     "mu_prior_scale": [0.1, 1.0], #2.5
     "sigma_prior_scale": [0.25], #1.0
-    "mu_q_scale": [0.1, 1.0], #2.5
-    "sigma_q_scale": [0.25], #1.0
-    "logits_q_scale": [0.1,1.0,5.0] #0.1, 5.0
+    "logits_prior_scale": [0.1, 1.0, 5.0], #0.1, 5.0
+    "learn_global_variances": [True, False]
 }
 
 # Function to format arguments into a command string
@@ -33,9 +32,8 @@ def format_command(args):
         f"--neighborhood_agg={args['neighborhood_agg']} "
         f"--mu_prior_scale={args['mu_prior_scale']} "
         f"--sigma_prior_scale={args['sigma_prior_scale']} "
-        f"--mu_q_scale={args['mu_q_scale']} "
-        f"--sigma_q_scale={args['sigma_q_scale']} "
-        f"--logits_q_scale={args['logits_q_scale']}"
+        f"--logits_prior_scale={args['logits_prior_scale']} "
+        f"--learn_global_variances={args['learn_global_variances']}"
     )
 
 # Generate all combinations of parameters

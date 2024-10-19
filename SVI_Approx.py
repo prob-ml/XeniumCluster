@@ -210,9 +210,8 @@ def Xenium_SVI(
         num_posterior_samples=100,
         mu_prior_scale=1.0,
         sigma_prior_scale=1.0,
-        mu_q_scale=1.0,
-        sigma_q_scale=0.1,
-        logits_q_scale=1.0
+        logits_prior_scale=1.0,
+        learn_global_variances=False
     ):
 
     print(f"Batch Size is {batch_size}.")
@@ -244,9 +243,9 @@ def Xenium_SVI(
             f"results/{dataset_name}/{model}/{component}/{data_file_path}/"
             f"INIT={custom_init}/NEIGHBORSIZE={neighborhood_size}/NUMCLUSTERS={num_clusters}/"
             f"/SAMPLEFORASSIGNMENT={sample_for_assignment}/"
-            f"/SPATIALPRIORMULT=DIRECT/"
-            f"SPOTSIZE={spot_size}/AGG={neighborhood_agg}/"
-            f"MU_PRIOR={mu_prior_scale}/SIGMA_PRIOR={sigma_prior_scale}/MU_Q={mu_q_scale}/SIGMA_Q={sigma_q_scale}/LOGITS_Q={logits_q_scale}"
+            f"/SPATIALPRIORMULT=DIRECT/SPOTSIZE={spot_size}/AGG={neighborhood_agg}/"
+            f"MU_PRIOR={mu_prior_scale}/SIGMA_PRIOR={sigma_prior_scale}/LOGITS_PRIOR={logits_prior_scale}/"
+            f"LEARN_GLOBAL_VARS={learn_global_variances}"
         )
 
         return total_file_path
@@ -254,9 +253,7 @@ def Xenium_SVI(
     pyro.clear_param_store()
 
     # Clamping
-    MIN_CONCENTRATION = 0.01
-
-    num_posterior_samples = 100
+    MIN_CONCENTRATION = 0.001
 
     spatial_init_data = StandardScaler().fit_transform(gene_data)
     gene_data = StandardScaler().fit_transform(gene_data)
@@ -412,13 +409,6 @@ def Xenium_SVI(
         )
 
     NUM_PARTICLES = 25
-
-    expected_total_param_dim = 2 # K x D
-
-    torch.set_printoptions(sci_mode=False)
-    PRIOR_SCALE = np.sqrt(0.1) # higher means weaker
-    NUM_PARTICLES = 25
-
     expected_total_param_dim = 2 # K x D
 
     def model(data):
@@ -433,7 +423,7 @@ def Xenium_SVI(
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
             batch_data = data[ind]
             mu = torch.log(spatial_cluster_probs_prior[ind])
-            cov_matrix = torch.eye(mu.shape[1], dtype=mu.dtype, device=mu.device) * logits_q_scale
+            cov_matrix = torch.eye(mu.shape[1], dtype=mu.dtype, device=mu.device) * logits_prior_scale
             cluster_probs_logits = pyro.sample("cluster_logits", dist.MultivariateNormal(mu, cov_matrix))
             cluster_probs = torch.softmax(cluster_probs_logits, dim=-1)
             # likelihood for batch
@@ -458,14 +448,20 @@ def Xenium_SVI(
     def guide(data):
         # Initialize cluster assignment probabilities for the entire dataset
         cluster_probs_logits_q_mean = pyro.param("cluster_logits_q_mean", torch.log(spatial_cluster_probs_prior) + torch.randn_like(spatial_cluster_probs_prior) * 0.1)
-        cluster_probs_logits_q_scale = pyro.param("cluster_logits_q_scale", torch.ones_like(spatial_cluster_probs_prior, dtype=spatial_cluster_probs_prior.dtype, device=spatial_cluster_probs_prior.device) * logits_q_scale, dist.constraints.positive)
+        cluster_probs_logits_q_scale = pyro.param("cluster_logits_q_scale", torch.ones_like(spatial_cluster_probs_prior, dtype=spatial_cluster_probs_prior.dtype, device=spatial_cluster_probs_prior.device) * logits_prior_scale, dist.constraints.positive)
 
         with pyro.plate("clusters", num_clusters):
             # Global variational parameters for means and scales
-            cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means + torch.randn_like(empirical_prior_means) * 0.05)
-            cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales + torch.randn_like(empirical_prior_scales) * 0.01, constraint=dist.constraints.positive)
-            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, mu_q_scale).to_event(1))
-            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, sigma_q_scale).to_event(1))
+            cluster_means_q_mean = pyro.param("cluster_means_q_mean", empirical_prior_means + torch.randn_like(empirical_prior_means) * 0.05)
+            cluster_scales_q_mean = pyro.param("cluster_scales_q_mean", empirical_prior_scales + torch.randn_like(empirical_prior_scales) * 0.01, constraint=dist.constraints.positive)
+            if learn_global_variances:
+                cluster_means_q_scale = pyro.param("cluster_means_q_scale", torch.ones_like(empirical_prior_means) * mu_prior_scale, constraint=dist.constraints.positive)
+                cluster_scales_q_scale = pyro.param("cluster_scales_q_scale", torch.ones_like(empirical_prior_scales) * sigma_prior_scale, constraint=dist.constraints.positive)
+                cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q_mean, cluster_means_q_scale).to_event(1))
+                cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q_mean, cluster_scales_q_scale).to_event(1))
+            else:
+                cluster_means = pyro.sample("cluster_means", dist.Delta(cluster_means_q_mean).to_event(1))
+                cluster_scales = pyro.sample("cluster_scales", dist.Delta(cluster_scales_q_mean).to_event(1))
 
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
@@ -478,15 +474,14 @@ def Xenium_SVI(
     NUM_BATCHES = int(math.ceil(data.shape[0] / batch_size))
     # Setup the optimizer
     def per_param_callable(param_name):
-        if param_name == 'cluster_means_q':
-            return {"lr": 0.0005, "betas": (0.9, 0.999)}
-        elif param_name == 'cluster_scales_q':
-            return {"lr": 0.0001, "betas": (0.9, 0.999)}
+        if param_name == 'cluster_means_q_mean':
+            return {"lr": 0.001, "betas": (0.9, 0.999)}
+        elif param_name == 'cluster_scales_q_mean':
+            return {"lr": 0.001, "betas": (0.9, 0.999)}
         else:
-            return {"lr": 0.01, "betas": (0.9, 0.999)}
+            return {"lr": 0.005, "betas": (0.9, 0.999)}
 
     scheduler = Adam(per_param_callable)
-
 
     # Setup the inference algorithm
     svi = SVI(model, guide, scheduler, loss=TraceMeanField_ELBO(num_particles=NUM_PARTICLES, vectorize_particles=True))
@@ -500,7 +495,7 @@ def Xenium_SVI(
 
     epoch_pbar = tqdm(range(NUM_EPOCHS))
     current_min_loss = float('inf')
-    PATIENCE = 5
+    PATIENCE = 10
     patience_counter = 0
     for epoch in epoch_pbar:
         epoch_pbar.set_description(f"Epoch {epoch}")
@@ -560,8 +555,8 @@ def Xenium_SVI(
             cluster_assignments_q = cluster_probs_q.argmax(dim=1)
             cluster_assignments_prior = cluster_assignments_prior_FALSE
         
-        cluster_means_q = pyro.param("cluster_means_q").cpu().detach()
-        cluster_scales_q = pyro.param("cluster_scales_q").cpu().detach()
+        cluster_means_q_mean = pyro.param("cluster_means_q_mean").cpu().detach()
+        cluster_scales_q_mean = pyro.param("cluster_scales_q_mean").cpu().detach()
         cluster_probs_q = cluster_probs_q.cpu().detach()
         cluster_assignments_q = cluster_assignments_q.cpu().detach()
         cluster_assignments_prior = cluster_assignments_prior.cpu().detach()
@@ -683,6 +678,23 @@ def Xenium_SVI(
 
             cluster_confidences[rows, columns] = cluster_probs_q.max(dim=1).values
 
+            heatmap_bins = 21
+            colors = plt.cm.get_cmap('YlOrRd', heatmap_bins)
+            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, heatmap_bins - 1))))
+            colormap = ListedColormap(colormap_colors)
+
+            plt.figure(figsize=(6, 6))
+            plt.imshow(cluster_confidences, cmap=colormap, interpolation='nearest', origin='lower')
+            # plt.xticks([])  # Remove x-axis tick marks
+            # plt.yticks([])  # Remove y-axis tick marks
+            plt.gca().spines['top'].set_visible(False)  # Remove top border
+            plt.gca().spines['right'].set_visible(False)  # Remove right border
+            # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+            # plt.gca().spines['left'].set_visible(False)  # Remove left border
+            cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
+            plt.title(r'$P(z_i = k)$')
+
+
             colors = plt.cm.get_cmap('Greys', num_clusters + 1)
             colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
@@ -692,7 +704,13 @@ def Xenium_SVI(
                 confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
                 plt.figure(figsize=(6, 6))
                 plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
-                plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+                # plt.xticks([])  # Remove x-axis tick marks
+                # plt.yticks([])  # Remove y-axis tick marks
+                plt.gca().spines['top'].set_visible(False)  # Remove top border
+                plt.gca().spines['right'].set_visible(False)  # Remove right border
+                # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+                # plt.gca().spines['left'].set_visible(False)  # Remove left border
+                cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
                 # PLOT ALL UNCERTAINTY VALUESs
                 plt.title(r'$P(z_i = k) > $' + f'{uncertainty_value}')
                 if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
@@ -710,7 +728,7 @@ def Xenium_SVI(
                 f"{bayxensmooth_clusters_filepath}/result.png"
             )
 
-    return cluster_probs_q, cluster_means_q, cluster_scales_q
+    return cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean
 
 
 def str2bool(v):
@@ -735,9 +753,8 @@ def parse_args():
     parser.add_argument("--neighborhood_agg", type=str, required=True)
     parser.add_argument("--mu_prior_scale", type=float, required=True)
     parser.add_argument("--sigma_prior_scale", type=float, required=True)
-    parser.add_argument("--mu_q_scale", type=float, required=True)
-    parser.add_argument("--sigma_q_scale", type=float, required=True)
-    parser.add_argument("--logits_q_scale", type=float, required=True)
+    parser.add_argument("--logits_prior_scale", type=float, required=True)
+    parser.add_argument("--learn_global_variances", type=str2bool, required=True)
     return parser.parse_args()
 
 def main():
@@ -767,7 +784,7 @@ def main():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_probs_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+    cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,
@@ -783,15 +800,15 @@ def main():
         neighborhood_agg=args.neighborhood_agg,
         mu_prior_scale=args.mu_prior_scale,
         sigma_prior_scale=args.sigma_prior_scale,
-        mu_q_scale=args.mu_q_scale,
-        sigma_q_scale=args.sigma_q_scale,
-        logits_q_scale=args.logits_q_scale
+        logits_prior_scale=args.logits_prior_scale,
+        learn_global_variances=args.learn_global_variances
     )
 
     sample_for_assignment_options = [False, True]
 
+    # FIX THIS LATER
     for sample_for_assignment in sample_for_assignment_options:
-        cluster_probs_q = torch.softmax(pyro.param("cluster_logits_q"), dim=1)
+        cluster_probs_q = torch.softmax(pyro.param("cluster_logits_q_mean"), dim=1)
         if sample_for_assignment:
             cluster_assignments_q = pyro.sample("cluster_probs", dist.Categorical(cluster_probs_q)) 
         else:
@@ -854,7 +871,7 @@ def main_test():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_concentration_params_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+    cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,
@@ -870,9 +887,8 @@ def main_test():
         neighborhood_agg="mean",
         mu_prior_scale=1,
         sigma_prior_scale=1,
-        mu_q_scale=1,
-        sigma_q_scale=1,
-        logits_q_scale=1,
+        logits_prior_scale=1,
+        learn_global_variances=False
     )
 
 if __name__ == "__main__":

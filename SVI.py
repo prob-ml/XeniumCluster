@@ -434,10 +434,10 @@ def Xenium_SVI(
         
         with pyro.plate("clusters", num_clusters):
             # Global variational parameters for means and scales
-            cluster_means_q = pyro.param("cluster_means_q", empirical_prior_means + torch.randn_like(empirical_prior_means) * 0.05)
-            cluster_scales_q = pyro.param("cluster_scales_q", empirical_prior_scales + torch.randn_like(empirical_prior_scales) * 0.01, constraint=dist.constraints.positive)     
-            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q, 0.5).to_event(1))
-            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q, 0.25).to_event(1))
+            cluster_means_q_mean = pyro.param("cluster_means_q_mean", empirical_prior_means + torch.randn_like(empirical_prior_means) * 0.05)
+            cluster_scales_q_mean = pyro.param("cluster_scales_q_mean", empirical_prior_scales + torch.randn_like(empirical_prior_scales) * 0.01, constraint=dist.constraints.positive)     
+            cluster_means = pyro.sample("cluster_means", dist.Normal(cluster_means_q_mean, 0.5).to_event(1))
+            cluster_scales = pyro.sample("cluster_scales", dist.LogNormal(cluster_scales_q_mean, 0.25).to_event(1))
         
         with pyro.plate("data", len(data), subsample_size=batch_size) as ind:
 
@@ -535,8 +535,8 @@ def Xenium_SVI(
         cluster_assignments_q = cluster_probs_q.argmax(dim=1)
         
         cluster_concentration_params_q = cluster_concentration_params_q.cpu().detach()
-        cluster_means_q = pyro.param("cluster_means_q").cpu().detach()
-        cluster_scales_q = pyro.param("cluster_scales_q").cpu().detach()
+        cluster_means_q_mean = pyro.param("cluster_means_q_mean").cpu().detach()
+        cluster_scales_q_mean = pyro.param("cluster_scales_q_mean").cpu().detach()
         cluster_probs_q = cluster_probs_q.cpu().detach()
         cluster_assignments_q = cluster_assignments_q.cpu().detach()
         cluster_assignments_prior = cluster_assignments_prior.cpu().detach()
@@ -686,7 +686,7 @@ def Xenium_SVI(
                 f"{bayxensmooth_clusters_filepath}/result.png"
             )
 
-    return cluster_concentration_params_q, cluster_means_q, cluster_scales_q
+    return cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q
 
 
 def str2bool(v):
@@ -743,7 +743,7 @@ def main():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_concentration_params_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+    cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,
@@ -832,7 +832,7 @@ def main_test():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_concentration_params_q, cluster_means_q, cluster_scales_q = Xenium_SVI(
+    cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,
