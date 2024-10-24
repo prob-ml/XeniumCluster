@@ -127,7 +127,6 @@ class XeniumCluster:
             self,
             data: ad.AnnData,
             resolutions: List[float],
-            save_plot: bool = False,
             embedding: str = "umap", 
             **kwargs
         ):
@@ -144,38 +143,34 @@ class XeniumCluster:
             # plot embedding
             _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-            # Save plot if required
-            if save_plot:
+            target_dir = f"results/{self.dataset_name}/Leiden/{resolution}/clusters/{self.SPOT_SIZE}"
+            os.makedirs(target_dir, exist_ok=True)
+            
+            # Extracting row, col, and cluster values from the dataframe
+            rows = torch.tensor(data.obs["row"].astype(int))
+            cols = torch.tensor(data.obs["col"].astype(int))
+            clusters = torch.tensor(data.obs[f'leiden_{resolution}'].astype(int))
+            num_clusters = clusters.unique().size(0)
 
-                # Create the figure with specified size
-                fig, ax = plt.subplots(figsize=(12, 8))
+            num_rows = int(max(rows) - min(rows) + 1)
+            num_cols = int(max(cols) - min(cols) + 1)
 
-                # Plot data points
-                colors = [int(x) for x in data.obs[key_added]]
-                unique_clusters = np.unique(colors)
+            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-                for cluster_id in unique_clusters:
-                    indices = np.where(colors == cluster_id)[0]
-                    ax.scatter(
-                        data.obs["row"].iloc[indices],
-                        data.obs["col"].iloc[indices],
-                        label=f'Cluster {cluster_id}'
-                    )
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
-                # Configure legend to fit the plot height
-                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+            colormap = ListedColormap(colormap_colors)
 
-                # Set axis labels and title
-                ax.set_xlabel("x_coord")
-                ax.set_ylabel("y_coord")
-                ax.set_title(f"Leiden Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+            plt.figure(figsize=(6, 6))
+            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+            plt.title(f'Cluster Assignment with Leiden ($\gamma$ = {resolution})')
 
-                # Adjust layout to make space for the legend outside the plot
-                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
-
-                directory = f"results/{self.dataset_name}/Leiden/"
-                os.makedirs(directory, exist_ok=True)
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
+            plt.savefig(
+                f"{target_dir}/clusters_RES={resolution}.png"
+            )
 
         return {resolution: data.obs[f'leiden_{resolution}'].values.astype(int) for resolution in resolutions}
 
@@ -183,7 +178,6 @@ class XeniumCluster:
             self,
             data: ad.AnnData,
             resolutions: List[float],
-            save_plot: bool = False,
             embedding: str = "umap", 
             **kwargs
         ):
@@ -200,38 +194,35 @@ class XeniumCluster:
             # plot embedding
             _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-            # Save plot if required
-            if save_plot:
 
-                # Create the figure with specified size
-                fig, ax = plt.subplots(figsize=(12, 8))
+            target_dir = f"results/{self.dataset_name}/Louvain/{resolution}/clusters/{self.SPOT_SIZE}"
+            os.makedirs(target_dir, exist_ok=True)
+            
+            # Extracting row, col, and cluster values from the dataframe
+            rows = torch.tensor(data.obs["row"].astype(int))
+            cols = torch.tensor(data.obs["col"].astype(int))
+            clusters = torch.tensor(data.obs[f'louvain_{resolution}'].astype(int))
+            num_clusters = clusters.unique().size(0)
 
-                # Plot data points
-                colors = [int(x) for x in data.obs[key_added]]
-                unique_clusters = np.unique(colors)
+            num_rows = int(max(rows) - min(rows) + 1)
+            num_cols = int(max(cols) - min(cols) + 1)
 
-                for cluster_id in unique_clusters:
-                    indices = np.where(colors == cluster_id)[0]
-                    ax.scatter(
-                        data.obs["row"].iloc[indices],
-                        data.obs["col"].iloc[indices],
-                        label=f'Cluster {cluster_id}'
-                    )
+            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-                # Configure legend to fit the plot height
-                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
-                # Set axis labels and title
-                ax.set_xlabel("x_coord")
-                ax.set_ylabel("y_coord")
-                ax.set_title(f"Louvain Cluster Visualization: Resolution = {resolution}, Spot Size = {self.SPOT_SIZE}")
+            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+            colormap = ListedColormap(colormap_colors)
 
-                # Adjust layout to make space for the legend outside the plot
-                _ = plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+            plt.figure(figsize=(6, 6))
+            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+            plt.title(f'Cluster Assignment with Louvain ($\gamma$ = {resolution})')
 
-                directory = f"results/{self.dataset_name}/Louvain/"
-                os.makedirs(directory, exist_ok=True)
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_{resolution}_Z={self.THIRD_DIM}.png', bbox_inches='tight')
+            plt.savefig(
+                f"{target_dir}/clusters_RES={resolution}.png"
+            )
 
         return {resolution: data.obs[f'louvain_{resolution}'].values.astype(int) for resolution in resolutions}
 
@@ -240,7 +231,6 @@ class XeniumCluster:
             data: ad.AnnData,
             num_clusters: int = 3,
             groupby: List[str] = ["spot_number"],
-            save_plot: bool = False,
             embedding: str = "umap",
             include_spatial = True,
             **kwargs
@@ -284,38 +274,34 @@ class XeniumCluster:
         # plot embedding
         _ = plot_embedding(data, key_added, embedding, **kwargs)
 
-        # Save plot if required
-        if save_plot:
+        target_dir = f"results/{self.dataset_name}/Hierarchical/{num_clusters}/clusters/{self.SPOT_SIZE}"
+        os.makedirs(target_dir, exist_ok=True)
+            
+        # Extracting row, col, and cluster values from the dataframe
+        rows = torch.tensor(data.obs["row"].astype(int))
+        cols = torch.tensor(data.obs["col"].astype(int))
+        clusters = torch.tensor(data.obs[key_added].astype(int))
+        num_clusters = clusters.unique().size(0)
 
-            # Create the figure with specified size
-            fig, ax = plt.subplots(figsize=(12, 8))
+        num_rows = int(max(rows) - min(rows) + 1)
+        num_cols = int(max(cols) - min(cols) + 1)
 
-            # Plot data points
-            colors = [int(x) for x in data.obs[key_added]]
-            unique_clusters = np.unique(colors)
+        cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-            for cluster_id in unique_clusters:
-                indices = np.where(colors == cluster_id)[0]
-                ax.scatter(
-                    data.obs["row"].iloc[indices],
-                    data.obs["col"].iloc[indices],
-                    label=f'Cluster {cluster_id}'
-                )
+        cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
 
-            # Configure legend to fit the plot height
-            ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+        colors = plt.cm.get_cmap('viridis', num_clusters)
+        colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+        colormap = ListedColormap(colormap_colors)
 
-            # Set axis labels and title
-            ax.set_xlabel("x_coord")
-            ax.set_ylabel("y_coord")
-            ax.set_title(f"Hierarchical Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        plt.title(f'Cluster Assignment with Hierarchical')
 
-            # Adjust layout to make space for the legend outside the plot
-            plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
-
-            directory = f"results/{self.dataset_name}/hierarchical/{num_clusters}_SPATIALINIT={include_spatial}/"
-            os.makedirs(directory, exist_ok=True)
-            plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
+        plt.savefig(
+            f"{target_dir}/clusters_K={num_clusters}.png"
+        )
 
         return data.obs[key_added].values.astype(int)
 
@@ -344,38 +330,36 @@ class XeniumCluster:
 
             cluster_assignments = kmeans.predict(spatial_init_data)
 
-            # Save plot if required
-            if save_plot:
+            data.obs["cluster"] = cluster_assignments
 
-                # Create the figure with specified size
-                fig, ax = plt.subplots(figsize=(12, 8))
+            target_dir = f"results/{self.dataset_name}/K-Means/{K}/clusters/{self.SPOT_SIZE}"
+            os.makedirs(target_dir, exist_ok=True)
+                
+            # Extracting row, col, and cluster values from the dataframe
+            rows = torch.tensor(data.obs["row"].astype(int))
+            cols = torch.tensor(data.obs["col"].astype(int))
+            clusters = torch.tensor(data.obs["cluster"].astype(int))
+            num_clusters = clusters.unique().size(0)
 
-                # Plot data points
-                colors = [int(x) for x in cluster_assignments]
-                unique_clusters = np.unique(colors)
+            num_rows = int(max(rows) - min(rows) + 1)
+            num_cols = int(max(cols) - min(cols) + 1)
 
-                for cluster_id in unique_clusters:
-                    indices = np.where(colors == cluster_id)[0]
-                    ax.scatter(
-                        data.obs["row"].iloc[indices],
-                        data.obs["col"].iloc[indices],
-                        label=f'Cluster {cluster_id}'
-                    )
+            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-                # Configure legend to fit the plot height
-                ax.legend(title='Cluster ID', loc='center left', bbox_to_anchor=(1, 0.5))
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
-                # Set axis labels and title
-                ax.set_xlabel("x_coord")
-                ax.set_ylabel("y_coord")
-                ax.set_title(f"KMeans Cluster Visualization, Spot Size = {self.SPOT_SIZE}")
+            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+            colormap = ListedColormap(colormap_colors)
 
-                # Adjust layout to make space for the legend outside the plot
-                plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust left side of the rectangle in tight layout
+            plt.figure(figsize=(6, 6))
+            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+            plt.title(f'Cluster Assignment with K-Means')
 
-                directory = f"results/{self.dataset_name}/KMeans/{K}_SPATIALINIT={include_spatial}/"
-                os.makedirs(directory, exist_ok=True)
-                plt.savefig(f'{directory}{self.SPOT_SIZE}um_Z={self.THIRD_DIM}_CLUSTERS.png') 
+            plt.savefig(
+                f"{target_dir}/clusters_K={K}.png"
+            )
 
             return cluster_assignments
             
@@ -402,6 +386,7 @@ class XeniumCluster:
         run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{init_method}", f"{num_pcs}", f"{K}")
 
         target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{init_method}/{self.SPOT_SIZE}"
+        os.makedirs(target_dir, exist_ok=True)
         gammas = np.linspace(1, 3, 9) if grid_search else [2]
         for gamma in gammas:
             BayesSpace_clusters = pd.read_csv(f"{target_dir}/{gamma:.2f}/clusters_K={K}.csv", index_col=0)
@@ -410,7 +395,7 @@ class XeniumCluster:
             rows = torch.tensor(data.obs["row"].astype(int))
             cols = torch.tensor(data.obs["col"].astype(int))
             clusters = torch.tensor(data.obs["cluster"].astype(int))
-            num_clusters = len(np.unique(clusters))
+            num_clusters = clusters.unique().size(0)
 
             num_rows = int(max(rows) - min(rows) + 1)
             num_cols = int(max(cols) - min(cols) + 1)
@@ -425,7 +410,7 @@ class XeniumCluster:
             plt.figure(figsize=(6, 6))
             plt.imshow(cluster_grid, cmap=colormap, interpolation='nearest', origin='lower')
             plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-            plt.title('Cluster Assignment with KMeans')
+            plt.title(f'Cluster Assignment with BayesSpace ($\gamma$ = {gamma})')
 
             plt.savefig(
                 f"{target_dir}/{gamma:.2f}/clusters_K={K}.png"
@@ -437,8 +422,59 @@ class XeniumCluster:
         self,
         data: ad.AnnData,
         G: int = 17,
-        model_name: str = "EEE"
+        model_name: str = "EEE",
+        temp_dir: str = "temporary_pca_file.csv"
     ):
-        res = mclustpy(data.obsm["X_pca"], G=G, modelNames=model_name)
-        data.obs["cluster"] = res["classification"].astype(int)
+        """
+            G: if int, will check for all clusters 1:G. If list, will only check values in list.
+        """
+
+        def run_r_script(script_path: str, *args):
+            """
+            Function to run an R script with optional arguments and capture its output.
+            
+            Parameters:
+            script_path (str): Path to the R script.
+            *args: Additional arguments to pass to the R script.
+            
+            Returns:
+            str: The standard output from the R script.
+            """
+            command = ["Rscript", script_path] + list(args)
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            return result.stdout
+
+        np.savetxt(temp_dir, data.obsm["X_pca"], delimiter=",")
+        num_output_clusters = run_r_script("mclust.R", temp_dir, f"{G}", f"{data.obsm['X_pca'].shape[1]}", f"{self.SPOT_SIZE}", self.dataset_name)
+        target_dir = f"results/{self.dataset_name}/mclust/{data.obsm['X_pca'].shape[1]}/{G}/clusters/{self.SPOT_SIZE}"
+
+        mclust_clusters = pd.read_csv(f"{target_dir}/clusters_K={G}.csv", index_col=0)
+        data.obs["cluster"] = np.array(mclust_clusters["mclust cluster"])
+
+    
+        # Extracting row, col, and cluster values from the dataframe
+        rows = torch.tensor(data.obs["row"].astype(int))
+        cols = torch.tensor(data.obs["col"].astype(int))
+        clusters = torch.tensor(data.obs["cluster"].astype(int))
+        num_clusters = clusters.unique().size(0)
+        num_rows = int(max(rows) - min(rows) + 1)
+        num_cols = int(max(cols) - min(cols) + 1)
+
+        cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
+
+        cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
+
+        colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+        colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+        colormap = ListedColormap(colormap_colors)
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        plt.title(f'Cluster Assignment with mclust')
+
+        plt.savefig(
+            f"{target_dir}/clusters_K={G}.png"
+        )
+
         return data.obs["cluster"].values

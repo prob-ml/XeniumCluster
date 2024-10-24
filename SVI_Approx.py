@@ -211,7 +211,8 @@ def Xenium_SVI(
         mu_prior_scale=1.0,
         sigma_prior_scale=1.0,
         logits_prior_scale=1.0,
-        learn_global_variances=False
+        learn_global_variances=False,
+        weighted_p=5,
     ):
 
     print(f"Batch Size is {batch_size}.")
@@ -222,13 +223,13 @@ def Xenium_SVI(
 
         # This function initializes clusters based on the specified method
         if method == "K-Means":
-            initial_clusters = original_adata.KMeans(original_adata.xenium_spot_data, save_plot=True, K=K, include_spatial=False)
+            initial_clusters = original_adata.KMeans(original_adata.xenium_spot_data, save_plot=False, K=K, include_spatial=False)
         elif method == "Hierarchical":
-            initial_clusters = original_adata.Hierarchical(original_adata.xenium_spot_data, save_plot=True, K=K)
+            initial_clusters = original_adata.Hierarchical(original_adata.xenium_spot_data, save_plot=True, num_clusters=K)
         elif method == "Leiden":
-            initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.75], save_plot=True, K=K)[0.75]
+            initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.75], save_plot=False, K=K)[0.75]
         elif method == "Louvain":
-            initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=True, K=K)[1.0]
+            initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=False, K=K)[1.0]
         elif method == "mclust":
             original_adata.pca(original_adata.xenium_spot_data, num_pcs)
             initial_clusters = original_adata.mclust(original_adata.xenium_spot_data, G=K, model_name = "EEE")
@@ -236,7 +237,7 @@ def Xenium_SVI(
             raise ValueError(f"Unknown method: {method}")
 
         return initial_clusters
-
+    
     def save_filepath(model, component, sample_for_assignment=None):
 
         total_file_path = (
@@ -268,7 +269,7 @@ def Xenium_SVI(
 
     if custom_init:
 
-        initial_clusters = custom_cluster_initialization(original_adata, custom_init)
+        initial_clusters = custom_cluster_initialization(original_adata, custom_init, K=num_clusters)
 
         match data_mode:
             case "PCA":
@@ -336,7 +337,7 @@ def Xenium_SVI(
 
         cluster_probs_prior = torch.ones((len(gene_data), num_clusters), dtype=float)
 
-    locations_tensor = torch.tensor(spatial_locations.to_numpy())
+    locations_tensor = torch.as_tensor(spatial_locations.values, dtype=torch.float16, device='cuda')
 
     # Compute the number of elements in each dimension
     num_spots = cluster_probs_prior.shape[0]
@@ -364,8 +365,8 @@ def Xenium_SVI(
             locations = original_adata.xenium_spot_data.obs[["x_location", "y_location", "z_location"]].values
             neighboring_locations = locations[neighboring_spot_indexes[i]].astype(float)
             distances = torch.tensor(np.linalg.norm(neighboring_locations - locations[i], axis=1))
-            def distance_weighting(x):
-                weight = 1/(1 + x/spot_size)
+            def distance_weighting(x, p=weighted_p):
+                weight = 1/(1 + x/spot_size) ** (1/weighted_p)
                 # print(weight)
                 return weight / weight.sum()
             neighborhood_priors = (priors_in_neighborhood * distance_weighting(distances).reshape(-1, 1)).sum(dim=0)
@@ -609,50 +610,52 @@ def Xenium_SVI(
                 fp.write(str(torch.mean((cluster_assignments_prior == cluster_assignments_q).float()).item()))
 
             # grab the WSS distance of cluster labels
+            cluster_labels = np.unique(clusters)
             wss = {}
-            for label in range(1, num_clusters + 1):
+            for label in cluster_labels:
                 current_cluster_locations = torch.stack(torch.where((cluster_grid.cpu() == label)), axis=1).to(float)
                 wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
 
             if not os.path.exists(bayxensmooth_wss_filepath := save_filepath("BayXenSmooth", "wss", sample_for_assignment)):
                 os.makedirs(bayxensmooth_wss_filepath)
-            with open(f"{bayxensmooth_wss_filepath}/wss.json", 'w') as fp:
+            with open(f"{bayxensmooth_wss_filepath}/clusters_K={num_clusters}_wss.json", 'w') as fp:
                 json.dump(wss, fp)
 
             cmap = get_cmap('rainbow')
 
-            if isinstance(original_adata.xenium_spot_data.X, csr_matrix):
-                labels = np.unique(cluster_assignments_q)  # Define the number of clusters
-                gene_columns = original_adata.xenium_spot_data.var.index  # Column names from another source
-                mean_expression_by_cluster = pd.DataFrame(columns=gene_columns)
-
-                # Loop through each cluster label
-                for label in labels:
-                    # Find indexes of current cluster
-                    current_cluster_indexes = torch.where(cluster_assignments_q == label)[0].numpy()
-                    
-                    # Efficiently extract the rows for the current cluster using fancy indexing
-                    expressions = original_adata.xenium_spot_data.X[current_cluster_indexes, :]
-                    
-                    # Compute mean expressions; the result is still a csr_matrix
-                    mean_expressions = expressions.mean(axis=0)
-                    
-                    # Convert mean_expressions to a dense format and then to a DataFrame
-                    mean_expressions_df = pd.DataFrame(mean_expressions.A, columns=gene_columns)
-                    
-                    # Append the result to the mean_expression_by_cluster DataFrame
-                    mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions_df], ignore_index=True)
-            else:
-                # identify marker genes within each cluster
-                mean_expression_by_cluster = pd.DataFrame(columns=original_adata.xenium_spot_data.var.index)
-
-                for label in range(num_clusters):
-                    current_cluster_indexes = list(torch.where(cluster_assignments_q == label)[0].cpu().numpy())
-                    expressions = pd.DataFrame(original_adata.xenium_spot_data.X, columns=original_adata.xenium_spot_data.var.index).iloc[current_cluster_indexes, :]
-                    mean_expressions = expressions.mean(axis=0).to_frame().T
-                    mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions], ignore_index=True)
-
             if evaluate_markers:
+
+                if isinstance(original_adata.xenium_spot_data.X, csr_matrix):
+                    labels = np.unique(cluster_assignments_q)  # Define the number of clusters
+                    gene_columns = original_adata.xenium_spot_data.var.index  # Column names from another source
+                    mean_expression_by_cluster = pd.DataFrame(columns=gene_columns)
+
+                    # Loop through each cluster label
+                    for label in labels:
+                        # Find indexes of current cluster
+                        current_cluster_indexes = torch.where(cluster_assignments_q == label)[0].numpy()
+                        
+                        # Efficiently extract the rows for the current cluster using fancy indexing
+                        expressions = original_adata.xenium_spot_data.X[current_cluster_indexes, :]
+                        
+                        # Compute mean expressions; the result is still a csr_matrix
+                        mean_expressions = expressions.mean(axis=0)
+                        
+                        # Convert mean_expressions to a dense format and then to a DataFrame
+                        mean_expressions_df = pd.DataFrame(mean_expressions.A, columns=gene_columns)
+                        
+                        # Append the result to the mean_expression_by_cluster DataFrame
+                        mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions_df], ignore_index=True)
+                else:
+                    # identify marker genes within each cluster
+                    mean_expression_by_cluster = pd.DataFrame(columns=original_adata.xenium_spot_data.var.index)
+
+                    for label in range(num_clusters):
+                        current_cluster_indexes = list(torch.where(cluster_assignments_q == label)[0].cpu().numpy())
+                        expressions = pd.DataFrame(original_adata.xenium_spot_data.X, columns=original_adata.xenium_spot_data.var.index).iloc[current_cluster_indexes, :]
+                        mean_expressions = expressions.mean(axis=0).to_frame().T
+                        mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions], ignore_index=True)
+
                 for i, gene in enumerate(mean_expression_by_cluster.columns):
                     # using subplots() to draw vertical lines 
                     fig, ax = plt.subplots(figsize=(6, 6)) 
@@ -712,7 +715,7 @@ def Xenium_SVI(
                 # plt.gca().spines['left'].set_visible(False)  # Remove left border
                 cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
                 # PLOT ALL UNCERTAINTY VALUESs
-                plt.title(r'$P(z_i = k) > $' + f'{uncertainty_value}')
+                plt.title(r'$\max_k \, P(z_i = k) > $' + f'{uncertainty_value}')
                 if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
                     os.makedirs(bayxensmooth_uncertainty_filepath)
                 _ = plt.savefig(
@@ -858,7 +861,7 @@ def main_test():
             third_dim=False, 
             log_normalize=True, 
             likelihood_mode="PCA", 
-            num_pcs=3,
+            num_pcs=10,
             hvg_var_prop=0.9,
             min_expressions_per_spot=0
         )
@@ -876,23 +879,20 @@ def main_test():
         spatial_locations,
         original_adata,
         data_mode="PCA",
-        num_pcs=3,
+        num_pcs=10,
         hvg_var_prop=0.9, 
         dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
         spot_size=50, 
-        num_clusters=17, 
-        batch_size= 256 * int(2 ** ((100 / 50) - 1)), 
-        custom_init="mclust",
+        num_clusters=7, 
+        batch_size= 256 * int(2 ** ((100 / 25) - 1)), 
+        custom_init="K-Means",
         neighborhood_size=1,
         neighborhood_agg="mean",
         mu_prior_scale=1,
         sigma_prior_scale=1,
         logits_prior_scale=1,
-        learn_global_variances=False
+        learn_global_variances=True
     )
 
 if __name__ == "__main__":
     main()
-
-
-

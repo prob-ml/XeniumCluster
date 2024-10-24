@@ -183,19 +183,7 @@ def gene_morans_i(clustering, moran_clusters, clusters, num_neighbors=100, kerne
 
     # Calculate Moran's I for the genes
     morans_i = sc.metrics.morans_i(moran_clusters.obsp["adjacency"], vals=clustering.xenium_spot_data.X.T)
-    morans_i_dict = dict(zip(clustering.xenium_spot_data.var.index, [{"Moran's I": v} for v in morans_i]))
-
-    # p-value Calculation
-    N = moran_clusters.X.shape[0]
-    S_0 = moran_clusters.obsp["adjacency"].sum()
-    S_1 = 2 * (moran_clusters.obsp["adjacency"] ** 2).sum()
-    S_2 = (4 * np.square(moran_clusters.obsp["adjacency"].sum(axis=0))).sum()
-
-    E_I = -1/(N-1)
-    VAR_I = ( (N**2)*(N-1)*S_1 - N*(N-1)*S_2 - 2*(S_0**2) ) / ( (N+1)*((N-1)**2)*(S_0**2) )
-
-    for gene in morans_i_dict:
-        morans_i_dict[gene]["p-val"] = norm.sf( (morans_i_dict[gene]["Moran's I"] - E_I)/ (VAR_I**0.5) )
+    morans_i_dict = dict(zip(clustering.xenium_spot_data.var.index, morans_i))
 
     # Print the number of non-zero adjacencies
     if print_output:
@@ -224,7 +212,7 @@ def gene_gearys_c(clustering, gearys_clusters, clusters, num_neighbors=100):
 
 # %%
 models = ["BayXenSmooth"]
-num_neighboring_spots = [50, 100, 200, 400]
+num_neighboring_spots = [400]
 spot_sizes = [50]
 kernels = ['umap']
 K = 17
