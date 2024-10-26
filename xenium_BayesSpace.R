@@ -88,5 +88,6 @@ SPOT_SIZE <- as.numeric(args[2])
 init_method <- args[3]
 num_pcs <- as.numeric(args[4])
 K <- ifelse(length(args) > 4, as.numeric(args[5]), NULL)
+grid_search <- ifelse(length(args) > 5, as.logical(args[6]), NULL)
 cat(c(SPOT_SIZE, num_pcs, K))
-BayesSpace(dataset_name, SPOT_SIZE, init_method, num_pcs, K)
+BayesSpace(dataset_name, SPOT_SIZE, init_method, num_pcs, K, grid_search)

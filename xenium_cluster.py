@@ -383,7 +383,7 @@ class XeniumCluster:
             command = ["Rscript", script_path] + list(args)
             subprocess.run(command, check=True, capture_output=False)
 
-        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{init_method}", f"{num_pcs}", f"{K}")
+        run_r_script("xenium_BayesSpace.R", self.dataset_name, f"{self.SPOT_SIZE}", f"{init_method}", f"{num_pcs}", f"{K}", f"{grid_search}")
 
         target_dir = f"results/{self.dataset_name}/BayesSpace/{num_pcs}/{K}/clusters/{init_method}/{self.SPOT_SIZE}"
         os.makedirs(target_dir, exist_ok=True)
