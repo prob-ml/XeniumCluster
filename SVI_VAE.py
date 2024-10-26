@@ -458,20 +458,20 @@ def Xenium_SVI(
             f".png"
         )
 
-        # grab the WSS distance of cluster labels
-        wss = {}
+        # grab the mpd distance of cluster labels
+        mpd = {}
         for label in range(1, num_clusters + 1):
             current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
-            wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
+            mpd[f"Cluster {label}"] = spot_size * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
 
-        if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/"):
-            os.makedirs(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/")
-        with open(f"results/{dataset_name}/BayXenSmooth/wss/{data_file_path}/"
+        if not os.path.exists(f"results/{dataset_name}/BayXenSmooth/mpd/{data_file_path}/"):
+            os.makedirs(f"results/{dataset_name}/BayXenSmooth/mpd/{data_file_path}/")
+        with open(f"results/{dataset_name}/BayXenSmooth/mpd/{data_file_path}/"
             f"KMEANSINIT={kmeans_init}_NEIGHBORSIZE={neighborhood_size}_NUMCLUSTERS={num_clusters}"
             f"_SPATIALINIT={spatial_init}_SAMPLEFORASSIGNMENT={sample_for_assignment}"
             f"_SPATIALNORM={spatial_normalize}_SPATIALPRIORMULT={concentration_amplification}_SPOTSIZE={spot_size}"
             f".json", 'w') as fp:
-            json.dump(wss, fp)
+            json.dump(mpd, fp)
 
         cmap = get_cmap('rainbow')
 

@@ -322,7 +322,7 @@ def Xenium_SVI(
 
             if not os.path.exists(kmeans_cluster_metrics_filepath := save_filepath("KMeans", "cluster_metrics")):
                 os.makedirs(kmeans_cluster_metrics_filepath)
-            with open(f"{kmeans_cluster_metrics_filepath}/wss.json", 'w') as fp:
+            with open(f"{kmeans_cluster_metrics_filepath}/mpd.json", 'w') as fp:
                 json.dump(cluster_metrics, fp)
 
         for i in range(num_clusters):
@@ -609,17 +609,17 @@ def Xenium_SVI(
             with open(f"{bayxensmooth_similar_filepath}/similarity.txt", 'w') as fp:
                 fp.write(str(torch.mean((cluster_assignments_prior == cluster_assignments_q).float()).item()))
 
-            # grab the WSS distance of cluster labels
+            # grab the mpd distance of cluster labels
             cluster_labels = np.unique(clusters)
-            wss = {}
+            mpd = {}
             for label in cluster_labels:
                 current_cluster_locations = torch.stack(torch.where((cluster_grid.cpu() == label)), axis=1).to(float)
-                wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
+                mpd[f"Cluster {label}"] = spot_size * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
 
-            if not os.path.exists(bayxensmooth_wss_filepath := save_filepath("BayXenSmooth", "wss", sample_for_assignment)):
-                os.makedirs(bayxensmooth_wss_filepath)
-            with open(f"{bayxensmooth_wss_filepath}/clusters_K={num_clusters}_wss.json", 'w') as fp:
-                json.dump(wss, fp)
+            if not os.path.exists(bayxensmooth_mpd_filepath := save_filepath("BayXenSmooth", "mpd", sample_for_assignment)):
+                os.makedirs(bayxensmooth_mpd_filepath)
+            with open(f"{bayxensmooth_mpd_filepath}/clusters_K={num_clusters}_mpd.json", 'w') as fp:
+                json.dump(mpd, fp)
 
             cmap = get_cmap('rainbow')
 

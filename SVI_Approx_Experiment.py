@@ -4,17 +4,17 @@ import subprocess
 
 # Define your parameter grid
 parameter_grid = {
-    "custom_init": ["K-Means"],
-    "neighborhood_size": range(1, 6),
-    "num_clusters": [7, 12, 17],
+    "custom_init": ["K-Means", "Leiden"],
+    "neighborhood_size": range(1, 4),
+    "num_clusters": [17],
     "spot_size": [50],
-    "num_pcs": [10],
+    "num_pcs": [3, 5, 10, 15, 25],
     "data_mode": ["PCA"],
     "hvg_var_prop": [0.9],
     "neighborhood_agg": ["mean"],
-    "mu_prior_scale": [1.0], #2.5
-    "sigma_prior_scale": [0.25], #1.0
-    "logits_prior_scale": [1.0], #0.1, 5.0
+    "mu_prior_scale": [2.5, 10.0], #2.5
+    "sigma_prior_scale": [1.0, 2.5], #1.0
+    "logits_prior_scale": [5.0, 10.0, 25.0], #0.1, 5.0
     "learn_global_variances": [True]
 }
 

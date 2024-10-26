@@ -389,6 +389,8 @@ class XeniumCluster:
         os.makedirs(target_dir, exist_ok=True)
         gammas = np.linspace(1, 3, 9) if grid_search else [2]
         for gamma in gammas:
+            new_target_dir = os.path.join(target_dir, f"{gamma:.2f}")
+            os.makedirs(new_target_dir, exist_ok=True)
             BayesSpace_clusters = pd.read_csv(f"{target_dir}/{gamma:.2f}/clusters_K={K}.csv", index_col=0)
             data.obs["cluster"] = np.array(BayesSpace_clusters["BayesSpace cluster"])
             # Extracting row, col, and cluster values from the dataframe
@@ -405,7 +407,8 @@ class XeniumCluster:
             cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
             colors = plt.cm.get_cmap('viridis', num_clusters + 1)
-            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+            colormap = ListedColormap(colormap_colors)
 
             plt.figure(figsize=(6, 6))
             plt.imshow(cluster_grid, cmap=colormap, interpolation='nearest', origin='lower')
@@ -413,7 +416,7 @@ class XeniumCluster:
             plt.title(f'Cluster Assignment with BayesSpace ($\gamma$ = {gamma})')
 
             plt.savefig(
-                f"{target_dir}/{gamma:.2f}/clusters_K={K}.png"
+                os.path.join(new_target_dir, f"clusters_K={K}.png")
             )
 
         return data.obs["cluster"].values.astype(int)
@@ -450,7 +453,6 @@ class XeniumCluster:
 
         mclust_clusters = pd.read_csv(f"{target_dir}/clusters_K={G}.csv", index_col=0)
         data.obs["cluster"] = np.array(mclust_clusters["mclust cluster"])
-
     
         # Extracting row, col, and cluster values from the dataframe
         rows = torch.tensor(data.obs["row"].astype(int))
