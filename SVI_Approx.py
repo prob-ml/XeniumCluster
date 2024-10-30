@@ -4,6 +4,7 @@ import torch
 import pyro
 import json
 import math
+import time
 from tqdm import tqdm
 from pyro.infer import SVI, Trace_ELBO, TraceMeanField_ELBO
 from pyro.optim import PyroOptim
@@ -215,7 +216,26 @@ def Xenium_SVI(
         weighted_p=5,
     ):
 
-    print(f"Batch Size is {batch_size}.")
+    if torch.cuda.is_available():
+        print("YAY! GPU available :3")
+        
+        # Get all available GPUs sorted by memory usage (lowest first)
+        available_gpus = GPUtil.getAvailable(order='memory', limit=1)
+        
+        if available_gpus:
+            selected_gpu = available_gpus[0]
+            
+            # Set the GPU with the lowest memory usage
+            torch.cuda.set_device(selected_gpu)
+            torch.set_default_tensor_type(torch.cuda.FloatTensor)
+            
+            print(f"Using GPU: {selected_gpu} with the lowest memory usage.")
+        else:
+            print("No GPUs available with low memory usage.")
+    else:
+        print("No GPU available :(")
+
+        print(f"Batch Size is {batch_size}.")
 
     def custom_cluster_initialization(original_adata, method, K=17):
 
@@ -507,7 +527,7 @@ def Xenium_SVI(
             # running_loss += (loss + SPATIAL_PENALTY_WEIGHT * spatial_penalty()) / batch_size
         # svi.optim.step()
         if epoch % 1 == 0:
-            print(f"Epoch {epoch} : loss = {round(running_loss, 4)}")
+            # print(f"Epoch {epoch} : loss = {round(running_loss, 4)}")
             # print(current_cluster_means[0])
             if running_loss > current_min_loss:
                 patience_counter += 1
@@ -563,173 +583,173 @@ def Xenium_SVI(
         cluster_assignments_prior = cluster_assignments_prior.cpu().detach()
 
         # Plotting
-        if spot_size:
+        # if spot_size:
 
-            rows = spatial_locations["row"].astype(int)
-            columns = spatial_locations["col"].astype(int)
+        #     rows = spatial_locations["row"].astype(int)
+        #     columns = spatial_locations["col"].astype(int)
 
-            num_rows = max(rows) + 1
-            num_cols = max(columns) + 1
+        #     num_rows = max(rows) + 1
+        #     num_cols = max(columns) + 1
 
-            cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.long)
+        #     cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.long)
 
-            cluster_grid[rows, columns] = cluster_assignments_q + 1
+        #     cluster_grid[rows, columns] = cluster_assignments_q + 1
 
-            colors = plt.cm.get_cmap('viridis', num_clusters + 1)
+        #     colors = plt.cm.get_cmap('viridis', num_clusters + 1)
 
-            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
-            colormap = ListedColormap(colormap_colors)
+        #     colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
+        #     colormap = ListedColormap(colormap_colors)
 
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-            plt.title('Posterior Cluster Assignment with BayXenSmooth')
+        #     plt.figure(figsize=(6, 6))
+        #     plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        #     plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        #     plt.title('Posterior Cluster Assignment with BayXenSmooth')
 
-            match data_mode:
-                case "PCA":
-                    data_file_path = f"{data_mode}/{num_pcs}"
-                case "HVG": 
-                    data_file_path = f"{data_mode}/{hvg_var_prop}"
-                case "ALL":
-                    data_file_path = f"{data_mode}"
-                case _:
-                    raise ValueError("The data mode specified is not supported.")
+        #     match data_mode:
+        #         case "PCA":
+        #             data_file_path = f"{data_mode}/{num_pcs}"
+        #         case "HVG": 
+        #             data_file_path = f"{data_mode}/{hvg_var_prop}"
+        #         case "ALL":
+        #             data_file_path = f"{data_mode}"
+        #         case _:
+        #             raise ValueError("The data mode specified is not supported.")
 
-            if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters", sample_for_assignment)):
-                os.makedirs(bayxensmooth_clusters_filepath)
-            _ = plt.savefig(
-                f"{bayxensmooth_clusters_filepath}/result.png"
-            )
+        #     if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters", sample_for_assignment)):
+        #         os.makedirs(bayxensmooth_clusters_filepath)
+        #     _ = plt.savefig(
+        #         f"{bayxensmooth_clusters_filepath}/result.png"
+        #     )
 
-            clusters = pd.DataFrame(cluster_assignments_q.cpu(), columns=["BayXenSmooth cluster"]).to_csv(f"{bayxensmooth_clusters_filepath}/clusters_K={num_clusters}.csv")
-            soft_clusters = pd.DataFrame(cluster_probs_q, columns=[f'P(z_i = {i})'  for i in range(1, num_clusters + 1)]).to_csv(f"{bayxensmooth_clusters_filepath}/soft_clusters_K={num_clusters}.csv")
+        #     clusters = pd.DataFrame(cluster_assignments_q.cpu(), columns=["BayXenSmooth cluster"]).to_csv(f"{bayxensmooth_clusters_filepath}/clusters_K={num_clusters}.csv")
+        #     soft_clusters = pd.DataFrame(cluster_probs_q, columns=[f'P(z_i = {i})'  for i in range(1, num_clusters + 1)]).to_csv(f"{bayxensmooth_clusters_filepath}/soft_clusters_K={num_clusters}.csv")
 
-            if not os.path.exists(bayxensmooth_similar_filepath := save_filepath("BayXenSmooth", "prior_v_posterior", sample_for_assignment)):
-                os.makedirs(bayxensmooth_similar_filepath)
-            with open(f"{bayxensmooth_similar_filepath}/similarity.txt", 'w') as fp:
-                fp.write(str(torch.mean((cluster_assignments_prior == cluster_assignments_q).float()).item()))
+        #     if not os.path.exists(bayxensmooth_similar_filepath := save_filepath("BayXenSmooth", "prior_v_posterior", sample_for_assignment)):
+        #         os.makedirs(bayxensmooth_similar_filepath)
+        #     with open(f"{bayxensmooth_similar_filepath}/similarity.txt", 'w') as fp:
+        #         fp.write(str(torch.mean((cluster_assignments_prior == cluster_assignments_q).float()).item()))
 
-            # grab the mpd distance of cluster labels
-            cluster_labels = np.unique(clusters)
-            mpd = {}
-            for label in cluster_labels:
-                current_cluster_locations = torch.stack(torch.where((cluster_grid.cpu() == label)), axis=1).to(float)
-                mpd[f"Cluster {label}"] = spot_size * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
+        #     # grab the mpd distance of cluster labels
+        #     cluster_labels = np.unique(clusters)
+        #     mpd = {}
+        #     for label in cluster_labels:
+        #         current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
+        #         mpd[f"Cluster {label}"] = spot_size * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations, p = 2)).item()
 
-            if not os.path.exists(bayxensmooth_mpd_filepath := save_filepath("BayXenSmooth", "mpd", sample_for_assignment)):
-                os.makedirs(bayxensmooth_mpd_filepath)
-            with open(f"{bayxensmooth_mpd_filepath}/clusters_K={num_clusters}_mpd.json", 'w') as fp:
-                json.dump(mpd, fp)
+        #     if not os.path.exists(bayxensmooth_mpd_filepath := save_filepath("BayXenSmooth", "mpd", sample_for_assignment)):
+        #         os.makedirs(bayxensmooth_mpd_filepath)
+        #     with open(f"{bayxensmooth_mpd_filepath}/clusters_K={num_clusters}_mpd.json", 'w') as fp:
+        #         json.dump(mpd, fp)
 
-            cmap = get_cmap('rainbow')
+        #     cmap = get_cmap('rainbow')
 
-            if evaluate_markers:
+        #     if evaluate_markers:
 
-                if isinstance(original_adata.xenium_spot_data.X, csr_matrix):
-                    labels = np.unique(cluster_assignments_q)  # Define the number of clusters
-                    gene_columns = original_adata.xenium_spot_data.var.index  # Column names from another source
-                    mean_expression_by_cluster = pd.DataFrame(columns=gene_columns)
+        #         if isinstance(original_adata.xenium_spot_data.X, csr_matrix):
+        #             labels = np.unique(cluster_assignments_q)  # Define the number of clusters
+        #             gene_columns = original_adata.xenium_spot_data.var.index  # Column names from another source
+        #             mean_expression_by_cluster = pd.DataFrame(columns=gene_columns)
 
-                    # Loop through each cluster label
-                    for label in labels:
-                        # Find indexes of current cluster
-                        current_cluster_indexes = torch.where(cluster_assignments_q == label)[0].numpy()
+        #             # Loop through each cluster label
+        #             for label in labels:
+        #                 # Find indexes of current cluster
+        #                 current_cluster_indexes = torch.where(cluster_assignments_q == label)[0].numpy()
                         
-                        # Efficiently extract the rows for the current cluster using fancy indexing
-                        expressions = original_adata.xenium_spot_data.X[current_cluster_indexes, :]
+        #                 # Efficiently extract the rows for the current cluster using fancy indexing
+        #                 expressions = original_adata.xenium_spot_data.X[current_cluster_indexes, :]
                         
-                        # Compute mean expressions; the result is still a csr_matrix
-                        mean_expressions = expressions.mean(axis=0)
+        #                 # Compute mean expressions; the result is still a csr_matrix
+        #                 mean_expressions = expressions.mean(axis=0)
                         
-                        # Convert mean_expressions to a dense format and then to a DataFrame
-                        mean_expressions_df = pd.DataFrame(mean_expressions.A, columns=gene_columns)
+        #                 # Convert mean_expressions to a dense format and then to a DataFrame
+        #                 mean_expressions_df = pd.DataFrame(mean_expressions.A, columns=gene_columns)
                         
-                        # Append the result to the mean_expression_by_cluster DataFrame
-                        mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions_df], ignore_index=True)
-                else:
-                    # identify marker genes within each cluster
-                    mean_expression_by_cluster = pd.DataFrame(columns=original_adata.xenium_spot_data.var.index)
+        #                 # Append the result to the mean_expression_by_cluster DataFrame
+        #                 mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions_df], ignore_index=True)
+        #         else:
+        #             # identify marker genes within each cluster
+        #             mean_expression_by_cluster = pd.DataFrame(columns=original_adata.xenium_spot_data.var.index)
 
-                    for label in range(num_clusters):
-                        current_cluster_indexes = list(torch.where(cluster_assignments_q == label)[0].cpu().numpy())
-                        expressions = pd.DataFrame(original_adata.xenium_spot_data.X, columns=original_adata.xenium_spot_data.var.index).iloc[current_cluster_indexes, :]
-                        mean_expressions = expressions.mean(axis=0).to_frame().T
-                        mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions], ignore_index=True)
+        #             for label in range(num_clusters):
+        #                 current_cluster_indexes = list(torch.where(cluster_assignments_q == label)[0].cpu().numpy())
+        #                 expressions = pd.DataFrame(original_adata.xenium_spot_data.X, columns=original_adata.xenium_spot_data.var.index).iloc[current_cluster_indexes, :]
+        #                 mean_expressions = expressions.mean(axis=0).to_frame().T
+        #                 mean_expression_by_cluster = pd.concat([mean_expression_by_cluster, mean_expressions], ignore_index=True)
 
-                for i, gene in enumerate(mean_expression_by_cluster.columns):
-                    # using subplots() to draw vertical lines 
-                    fig, ax = plt.subplots(figsize=(6, 6)) 
-                    ax.vlines(mean_expression_by_cluster[gene].index, ymin=0, ymax=mean_expression_by_cluster[gene], color=cmap(i / (len(mean_expression_by_cluster.columns) - 1))) 
+        #         for i, gene in enumerate(mean_expression_by_cluster.columns):
+        #             # using subplots() to draw vertical lines 
+        #             fig, ax = plt.subplots(figsize=(6, 6)) 
+        #             ax.vlines(mean_expression_by_cluster[gene].index, ymin=0, ymax=mean_expression_by_cluster[gene], color=cmap(i / (len(mean_expression_by_cluster.columns) - 1))) 
                     
-                    # drawing the markers
-                    ax.plot(mean_expression_by_cluster[gene].index, mean_expression_by_cluster[gene], "^", c=cmap(i / (len(mean_expression_by_cluster.columns) - 1))) 
-                    ax.set_ylim(0) 
+        #             # drawing the markers
+        #             ax.plot(mean_expression_by_cluster[gene].index, mean_expression_by_cluster[gene], "^", c=cmap(i / (len(mean_expression_by_cluster.columns) - 1))) 
+        #             ax.set_ylim(0) 
                     
-                    # formatting and details 
-                    ax.set_xlabel('Cluster Label') 
-                    ax.set_ylabel('Mean Expression') 
-                    ax.set_title(gene) 
-                    ax.set_xticks(mean_expression_by_cluster[gene].index) 
-                    if not os.path.exists(bayxensmooth_expression_filepath := save_filepath("BayXenSmooth", "expressions", sample_for_assignment)):
-                        os.makedirs(f"{bayxensmooth_expression_filepath}")
-                    _ = plt.savefig(
-                        f"{bayxensmooth_expression_filepath}/GENE={gene}.png"
-                    )
+        #             # formatting and details 
+        #             ax.set_xlabel('Cluster Label') 
+        #             ax.set_ylabel('Mean Expression') 
+        #             ax.set_title(gene) 
+        #             ax.set_xticks(mean_expression_by_cluster[gene].index) 
+        #             if not os.path.exists(bayxensmooth_expression_filepath := save_filepath("BayXenSmooth", "expressions", sample_for_assignment)):
+        #                 os.makedirs(f"{bayxensmooth_expression_filepath}")
+        #             _ = plt.savefig(
+        #                 f"{bayxensmooth_expression_filepath}/GENE={gene}.png"
+        #             )
             
-            # confidence mapping
-            cluster_confidences = torch.zeros((num_rows, num_cols), dtype=torch.double)
+        #     # confidence mapping
+        #     cluster_confidences = torch.zeros((num_rows, num_cols), dtype=torch.double)
 
-            cluster_confidences[rows, columns] = cluster_probs_q.max(dim=1).values
+        #     cluster_confidences[rows, columns] = cluster_probs_q.max(dim=1).values
 
-            heatmap_bins = 21
-            colors = plt.cm.get_cmap('YlOrRd', heatmap_bins)
-            colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, heatmap_bins - 1))))
-            colormap = ListedColormap(colormap_colors)
+        #     heatmap_bins = 21
+        #     colors = plt.cm.get_cmap('YlOrRd', heatmap_bins)
+        #     colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, heatmap_bins - 1))))
+        #     colormap = ListedColormap(colormap_colors)
 
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_confidences, cmap=colormap, interpolation='nearest', origin='lower')
-            # plt.xticks([])  # Remove x-axis tick marks
-            # plt.yticks([])  # Remove y-axis tick marks
-            plt.gca().spines['top'].set_visible(False)  # Remove top border
-            plt.gca().spines['right'].set_visible(False)  # Remove right border
-            # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
-            # plt.gca().spines['left'].set_visible(False)  # Remove left border
-            cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
-            plt.title(r'$P(z_i = k)$')
+        #     plt.figure(figsize=(6, 6))
+        #     plt.imshow(cluster_confidences, cmap=colormap, interpolation='nearest', origin='lower')
+        #     # plt.xticks([])  # Remove x-axis tick marks
+        #     # plt.yticks([])  # Remove y-axis tick marks
+        #     plt.gca().spines['top'].set_visible(False)  # Remove top border
+        #     plt.gca().spines['right'].set_visible(False)  # Remove right border
+        #     # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+        #     # plt.gca().spines['left'].set_visible(False)  # Remove left border
+        #     cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
+        #     plt.title(r'$P(z_i = k)$')
 
 
-            colors = plt.cm.get_cmap('Greys', num_clusters + 1)
-            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+        #     colors = plt.cm.get_cmap('Greys', num_clusters + 1)
+        #     colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
-            confidence_proportions = {}
-            for uncertainty_value in uncertainty_values:
-                confidence_matrix = (cluster_confidences > uncertainty_value).float()
-                confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
-                plt.figure(figsize=(6, 6))
-                plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
-                # plt.xticks([])  # Remove x-axis tick marks
-                # plt.yticks([])  # Remove y-axis tick marks
-                plt.gca().spines['top'].set_visible(False)  # Remove top border
-                plt.gca().spines['right'].set_visible(False)  # Remove right border
-                # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
-                # plt.gca().spines['left'].set_visible(False)  # Remove left border
-                cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
-                # PLOT ALL UNCERTAINTY VALUESs
-                plt.title(r'$\max_k \, P(z_i = k) > $' + f'{uncertainty_value}')
-                if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
-                    os.makedirs(bayxensmooth_uncertainty_filepath)
-                _ = plt.savefig(
-                    f"{bayxensmooth_uncertainty_filepath}/CONFIDENCE={uncertainty_value}.png"
-                )
+        #     confidence_proportions = {}
+        #     for uncertainty_value in uncertainty_values:
+        #         confidence_matrix = (cluster_confidences > uncertainty_value).float()
+        #         confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
+        #         plt.figure(figsize=(6, 6))
+        #         plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
+        #         # plt.xticks([])  # Remove x-axis tick marks
+        #         # plt.yticks([])  # Remove y-axis tick marks
+        #         plt.gca().spines['top'].set_visible(False)  # Remove top border
+        #         plt.gca().spines['right'].set_visible(False)  # Remove right border
+        #         # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+        #         # plt.gca().spines['left'].set_visible(False)  # Remove left border
+        #         cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
+        #         # PLOT ALL UNCERTAINTY VALUESs
+        #         plt.title(r'$\max_k \, P(z_i = k) > $' + f'{uncertainty_value}')
+        #         if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
+        #             os.makedirs(bayxensmooth_uncertainty_filepath)
+        #         _ = plt.savefig(
+        #             f"{bayxensmooth_uncertainty_filepath}/CONFIDENCE={uncertainty_value}.png"
+        #         )
 
-        else:
+        # else:
 
-            plt.scatter(spatial_locations["x_location"], spatial_locations["y_location"], s=1, c=cluster_assignments_q)
-            if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters", sample_for_assignment)):
-                os.makedirs(bayxensmooth_clusters_filepath)
-            _ = plt.savefig(
-                f"{bayxensmooth_clusters_filepath}/result.png"
-            )
+        #     plt.scatter(spatial_locations["x_location"], spatial_locations["y_location"], s=1, c=cluster_assignments_q)
+        #     if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters", sample_for_assignment)):
+        #         os.makedirs(bayxensmooth_clusters_filepath)
+        #     _ = plt.savefig(
+        #         f"{bayxensmooth_clusters_filepath}/result.png"
+        #     )
 
     return cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean
 
@@ -874,25 +894,33 @@ def main_test():
     print("Data Completed")
     
     # Call Xenium_SVI with the appropriate arguments
-    cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
-        gene_data, 
-        spatial_locations,
-        original_adata,
-        data_mode="PCA",
-        num_pcs=10,
-        hvg_var_prop=0.9, 
-        dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
-        spot_size=50, 
-        num_clusters=7, 
-        batch_size= 256 * int(2 ** ((100 / 25) - 1)), 
-        custom_init="K-Means",
-        neighborhood_size=1,
-        neighborhood_agg="mean",
-        mu_prior_scale=1,
-        sigma_prior_scale=1,
-        logits_prior_scale=1,
-        learn_global_variances=True
-    )
+    for num_pcs in [3, 5, 10, 15, 25]:
+        for init_method in ["K-Means", "mclust"]:
+            pyro.clear_param_store()
+            start_time = time.time()
+            cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
+                gene_data, 
+                spatial_locations,
+                original_adata,
+                data_mode="PCA",
+                num_pcs=num_pcs,
+                hvg_var_prop=0.9, 
+                dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
+                spot_size=50, 
+                num_clusters=7, 
+                batch_size= 256 * int(2 ** ((100 / 25) - 1)), 
+                custom_init=init_method,
+                neighborhood_size=1,
+                neighborhood_agg="mean",
+                mu_prior_scale=1,
+                sigma_prior_scale=1,
+                logits_prior_scale=1,
+                learn_global_variances=True
+            )
+            end_time = time.time()
+            print(f"Time taken for Xenium_SVI with num_pcs={num_pcs} and init_method={init_method}: {end_time - start_time} seconds")
+
+            torch.cuda.empty_cache()
 
 if __name__ == "__main__":
-    main()
+    main_test()

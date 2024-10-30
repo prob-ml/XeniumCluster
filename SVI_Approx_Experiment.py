@@ -7,7 +7,7 @@ parameter_grid = {
     "custom_init": ["K-Means", "Leiden"],
     "neighborhood_size": range(1, 4),
     "num_clusters": [17],
-    "spot_size": [50],
+    "spot_size": [25, 75, 100],
     "num_pcs": [3, 5, 10, 15, 25],
     "data_mode": ["PCA"],
     "hvg_var_prop": [0.9],

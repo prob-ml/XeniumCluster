@@ -74,26 +74,26 @@ def record_results(original_data, cluster_dict, results_dir, model_name, filenam
 
             cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
             
-            mpd = {}
+            wss = {}
             for label in cluster_labels:
                 current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
-                mpd[f"Cluster {label}"] = spot_size * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
-                print(f"POSSIBLE {len(cluster_labels)}", label, mpd[f"Cluster {label}"])
+                wss[f"Cluster {label}"] = (spot_size ** 2) * torch.mean(torch.cdist(current_cluster_locations, current_cluster_locations)).item()
+                print(f"POSSIBLE {len(cluster_labels)}", label, wss[f"Cluster {label}"])
 
-            mpd_dirpath = f"{results_dir}/{model_name}/{num_pcs}/{(str(resolution) if resolution is not None else str(K))}/mpd/{init_method}/{spot_size}"
-            if not os.path.exists(mpd_dirpath):
-                os.makedirs(mpd_dirpath)
+            wss_dirpath = f"{results_dir}/{model_name}/{num_pcs}/{(str(resolution) if resolution is not None else str(K))}/wss/{init_method}/{spot_size}"
+            if not os.path.exists(wss_dirpath):
+                os.makedirs(wss_dirpath)
 
-            mpd_filepath = f"{mpd_dirpath}/{gamma_str}/{filename}_mpd.json"
-            with open(mpd_filepath, "w") as f:
-                json.dump(mpd, f, indent=4)
+            wss_filepath = f"{wss_dirpath}/{gamma_str}/{filename}_wss.json"
+            with open(wss_filepath, "w") as f:
+                json.dump(wss, f, indent=4)
 
         except:
             continue
 
 # %%
 cluster_dict = {"BayesSpace": {}}
-mpd = {"BayesSpace": {}}
+wss = {"BayesSpace": {}}
 results_dir = "results/hBreast"
 
 # %%
@@ -135,11 +135,11 @@ for spot_size in spot_sizes:
                 for gamma in np.linspace(1, 3, 9):
                     gamma_str = f"{gamma:.2f}"
                     cluster_results_filename = f"clusters_K={K}"
-                    filename = f"results/hBreast/{method}/{num_pcs}/{K}/mpd/{init_method}/{spot_size}/{gamma_str}/{cluster_results_filename}_mpd.json"
+                    filename = f"results/hBreast/{method}/{num_pcs}/{K}/wss/{init_method}/{spot_size}/{gamma_str}/{cluster_results_filename}_wss.json"
                     if os.path.exists(filename):
-                        with open(filename, "r") as mpd_dict:
-                            current_mpd = json.load(mpd_dict)
-                        print("Method:", method, "Spot Size", spot_size, "Num Clusters:", len(current_mpd), "Num PCs", num_pcs, "\u03B3", f": {gamma_str}", "Initial Method:", init_method, "Total mpd:", sum(current_mpd.values()) / in_billions)
+                        with open(filename, "r") as wss_dict:
+                            current_wss = json.load(wss_dict)
+                        print("Method:", method, "Spot Size", spot_size, "Num Clusters:", len(current_wss), "Num PCs", num_pcs, "\u03B3", f": {gamma_str}", "Initial Method:", init_method, "Total WSS:", sum(current_wss.values()) / in_billions)
 
 # %%
 

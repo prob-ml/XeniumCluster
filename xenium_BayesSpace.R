@@ -12,9 +12,9 @@ library(Matrix)
 
 BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", num_pcs=15, K=NULL, grid_search=TRUE) {
 
-  rowData <- read.csv(paste0("data/BayesSpace/rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
-  colData <- read.csv(paste0("data/BayesSpace/colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
-  countsData <- t(read.csv(paste0("data/BayesSpace/counts_SPOT_SIZE=", SPOT_SIZE, ".csv"), row.names=1, check.names=F, stringsAsFactors=FALSE))
+  rowData <- read.csv(paste0("data/BayesSpace/", dataset, "_rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
+  colData <- read.csv(paste0("data/BayesSpace/", dataset, "_colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
+  countsData <- t(read.csv(paste0("data/BayesSpace/", dataset, "_counts_SPOT_SIZE=", SPOT_SIZE, ".csv"), row.names=1, check.names=F, stringsAsFactors=FALSE))
   
   # Create unique row names from the first column, then remove it from countsData
   rownames(countsData) <- rownames(rowData)
@@ -41,22 +41,28 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
     
     set.seed(102)
     
-    if (is_already_log_transformed) {
-      sce <- spatialPreprocess(sce, platform="ST", 
-                                   n.PCs=num_pcs, n.HVGs=2000, log.normalize=FALSE)
+    if (dataset == "SYNTHETIC") {
+      pca_data <- t(countsData)
+      rownames(pca_data) <- colnames(sce)  # Ensure row names match sce colnames
+      reducedDims(sce) <- list(PCA=pca_data)
     } else {
-      sce <- spatialPreprocess(sce, platform="ST", 
-                                   n.PCs=num_pcs, n.HVGs=2000, log.normalize=TRUE) 
+      if (is_already_log_transformed) {
+        sce <- spatialPreprocess(sce, platform="ST", 
+                                    n.PCs=num_pcs, n.HVGs=2000, log.normalize=FALSE)
+      } else {
+        sce <- spatialPreprocess(sce, platform="ST", 
+                                    n.PCs=num_pcs, n.HVGs=2000, log.normalize=TRUE) 
+      }
     }
     
-    
     sce <- sce[, !grepl("^(BLANK_|NegControl)", colnames(sce))]
-    sce <- qTune(sce, qs=seq(2, 15), platform="ST", d=num_pcs)
-    qPlot(sce)
     
     set.seed(149)
-    if (is.null(K))
+    if (is.null(K)) {
+      sce <- qTune(sce, qs=seq(2, 15), platform="ST", d=num_pcs)
+      qPlot(sce)
       q_optimal <- attr(sce, "q.logliks")[which.max(attr(sce, "q.logliks")$loglik),]$q
+    }
     else
       q_optimal <- K
 
