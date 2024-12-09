@@ -1,10 +1,11 @@
+# %%
 import argparse
 import os
 import torch
 import pyro
 import json
 import math
-import time
+import scipy
 from tqdm import tqdm
 from pyro.infer import SVI, Trace_ELBO, TraceMeanField_ELBO
 from pyro.optim import PyroOptim
@@ -36,6 +37,7 @@ import xenium_cluster
 reload(xenium_cluster)
 from xenium_cluster import XeniumCluster
 from utils.metrics import *
+from utils.BayesSpace import *
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -43,24 +45,140 @@ from sklearn.cluster import KMeans
 
 import GPUtil
 
+# %%
 if torch.cuda.is_available():
     print("YAY! GPU available :3")
     
     # Get all available GPUs sorted by memory usage (lowest first)
-    available_gpus = GPUtil.getAvailable(order='memory', limit=1)
+    available_gpus = GPUtil.getAvailable(order='memory', limit=4)
     
-    if available_gpus:
-        selected_gpu = available_gpus[0]
+    # Filter to only include GPUs 4, 5, 6, and 7
+    filtered_gpus = [gpu for gpu in available_gpus if gpu in [4, 5, 6, 7]]
+    
+    if filtered_gpus:
+        selected_gpu = filtered_gpus[0]
         
-        # Set the GPU with the lowest memory usage
+        # Set the GPU with the lowest memory usage from the filtered list
         torch.cuda.set_device(selected_gpu)
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
         
-        print(f"Using GPU: {selected_gpu} with the lowest memory usage.")
+        print(f"Using GPU: {selected_gpu} with the lowest memory usage from the filtered list.")
     else:
-        print("No GPUs available with low memory usage.")
+        print("No GPUs available with low memory usage from the filtered list.")
 else:
     print("No GPU available :(")
+
+# %% [markdown]
+# # Synthetic Data Generation
+
+# %%
+def prepare_synthetic_data(
+    grid_size = 50,
+    num_clusters = 5,
+    data_dimension = 5,
+    random_seed_weights = 1,
+    random_seed_data = 1,
+    r = 1
+):
+
+    # Set grid dimensions and random seed
+    np.random.seed(random_seed_weights)
+
+    # Step 1: Initialize an empty grid and randomly assign cluster "patches"
+    ground_truth = np.zeros((grid_size, grid_size), dtype=int)
+    for cluster_id in range(1, num_clusters):
+        # Randomly choose a center for each cluster
+        center_x, center_y = np.random.randint(0, grid_size, size=2)
+        radius = np.random.randint(10, 30)  # Random radius for each cluster region
+
+        # Assign cluster_id to a circular region around the chosen center
+        for i in range(grid_size):
+            for j in range(grid_size):
+                if (i - center_x) ** 2 + (j - center_y) ** 2 < radius ** 2:
+                    ground_truth[i, j] = cluster_id
+
+    # Step 2: Add random noise within each patch
+    noise_level = 0.5
+    noisy_grid = ground_truth + noise_level * np.random.randn(grid_size, grid_size)
+
+    # Step 3: Apply Gaussian smoothing to create spatial clustering
+    sigma = 3  # Controls the amount of clustering smoothness
+    smoothed_grid = scipy.ndimage.gaussian_filter(noisy_grid, sigma=sigma)
+
+    # Step 4: Threshold to obtain integer values
+    clustered_grid = np.round(smoothed_grid).astype(int)
+    clustered_grid = np.clip(clustered_grid, 0, num_clusters)
+
+    # Plot the clustered grid with flipped y axis
+    # fig, ax = plt.subplots(figsize=(6, 6)) 
+    # ax.imshow(clustered_grid, cmap="tab20", interpolation="nearest", origin='lower')  # Flip y axis by setting origin to 'lower'
+    # ax.set_title("Ground Truth Clusters")
+    # plt.colorbar(ax.imshow(clustered_grid, cmap="rainbow", interpolation="nearest", origin='lower'), ax=ax, label="Cluster Level", ticks=range(num_clusters + 1))  # Flip y axis by setting origin to 'lower'
+    # import os
+    # os.makedirs("results/SYNTHETIC", exist_ok=True)
+    # plt.savefig("results/SYNTHETIC/ground_truth.png")
+    
+    # plt.show()
+
+    def find_indices_within_distance(grid, r=1):
+        indices_within_distance = np.empty((grid.shape[0], grid.shape[1]), dtype=object)
+        for i in range(grid.shape[0]):
+            for j in range(grid.shape[1]):
+                # Check all neighboring cells within a Manhattan distance of 1
+                neighbors = []
+                for x in range(max(0, i-r), min(grid.shape[0], i+r+1)):
+                    for y in range(max(0, j-r), min(grid.shape[1], j+r+1)):
+                        if abs(x - i) + abs(y - j) <= r:
+                            neighbors.append((x, y))
+                indices_within_distance[i, j] = neighbors
+        return indices_within_distance
+
+    # get the rook neighbors for each spot
+    indices = find_indices_within_distance(clustered_grid, r=r)
+
+    prior_weights = np.zeros((clustered_grid.shape[0] * clustered_grid.shape[1], num_clusters))
+
+    # for each spot sample 
+    for i in range(clustered_grid.shape[0]):
+        for j in range(clustered_grid.shape[1]):
+            for neighbor in indices[i, j]:
+                prior_weights[i * clustered_grid.shape[1] + j, clustered_grid[neighbor]] += 1
+    prior_weights = prior_weights / prior_weights.sum(axis=1, keepdims=True)
+
+    # Initialize lists for means, covariances, and data points
+    means = []
+    covariances = []
+    data = np.empty((clustered_grid.shape[0] * clustered_grid.shape[1], data_dimension))
+
+    # Generate means and covariances for each cluster
+    for i in range(num_clusters):
+        # Randomly set the mean close to the origin to encourage overlap
+        mean = np.random.uniform(-5, 5, data_dimension)
+        # Generate a diagonal covariance matrix with random magnitudes
+        covariance = np.diag(np.random.rand(data_dimension) * 2.5)
+        
+        means.append(mean)
+        covariances.append(covariance)
+        
+    # Generate samples from the mixture.
+    np.random.seed(random_seed_data)
+    for i, weights in enumerate(prior_weights):
+        data[i] = np.sum(weights[k] * np.random.multivariate_normal(means[k], covariances[k], 1) for k in range(num_clusters))
+
+    # Create an anndata object
+    adata = ad.AnnData(data)
+
+    # Add row and col index
+    adata.obs['spot_number'] = np.arange(clustered_grid.shape[0] * clustered_grid.shape[1])
+    adata.obs['spot_number'] = adata.obs['spot_number'].astype('category')
+    adata.obs['row'] = np.repeat(np.arange(clustered_grid.shape[0]), clustered_grid.shape[1])
+    adata.obs['col'] = np.tile(np.arange(clustered_grid.shape[1]), clustered_grid.shape[0])
+    clustering = XeniumCluster(data=adata.X, dataset_name="SYNTHETIC")
+    clustering.xenium_spot_data = adata
+
+    Xenium_to_BayesSpace(clustering.xenium_spot_data, dataset_name="SYNTHETIC", spot_size=grid_size)
+
+    return clustering.xenium_spot_data.X, clustering.xenium_spot_data.obs[['row', 'col']], clustering, prior_weights, means, covariances
 
 def prepare_DLPFC_data(
     section_id=151670,
@@ -78,7 +196,7 @@ def prepare_DLPFC_data(
     if log_normalize:
         clustering.xenium_spot_data.X = np.log1p(clustering.xenium_spot_data.X)
 
-    sc.tl.pca(clustering.xenium_spot_data, svd_solver='arpack', n_comps=num_pcs)
+    clustering.pca(clustering.xenium_spot_data, num_pcs)
     data = clustering.xenium_spot_data.obsm["X_pca"]
 
     return data, spatial_locations, clustering
@@ -138,7 +256,7 @@ def prepare_Xenium_data(
             clustering.normalize_counts(clustering.xenium_spot_data)
 
         if likelihood_mode == "PCA":
-            sc.tl.pca(clustering.xenium_spot_data, svd_solver='arpack', n_comps=num_pcs)
+            clustering.pca(clustering.xenium_spot_data, num_pcs)
             data = clustering.xenium_spot_data.obsm["X_pca"]
         elif likelihood_mode == "HVG":
             min_dispersion = torch.distributions.normal.Normal(0.0, 1.0).icdf(hvg_var_prop)
@@ -192,6 +310,28 @@ def prepare_Xenium_data(
     # the last one is to regain var/obs access from original data
     return data, spatial_locations, clustering 
 
+# %%
+from scipy.optimize import linear_sum_assignment
+def match_labels(true_soft_assignments, inferred_soft_assignments):
+    """
+    Match inferred cluster labels to true cluster labels using the Hungarian algorithm for each row.
+    Args:
+        true_soft_assignments (torch.Tensor): True soft cluster assignments (N x K).
+        inferred_soft_assignments (torch.Tensor): Inferred soft cluster assignments (N x K).
+    Returns:
+        torch.Tensor: Permutation indices for each row of inferred labels.
+    """
+    # Compute pairwise distances between true and inferred soft assignments for each row
+    distance_matrix = torch.cdist(true_soft_assignments, inferred_soft_assignments, p=2)
+    
+    # Find optimal matching between true and inferred clusters for each row
+    row_ind, col_ind = linear_sum_assignment(distance_matrix.cpu().numpy())
+    
+    # Re-order the columns of each row according to the optimal matching
+    reordered_inferred_soft_assignments = inferred_soft_assignments[torch.tensor(col_ind)]
+    
+    return reordered_inferred_soft_assignments  # Re-ordered inferred soft assignments
+
 def Xenium_SVI(
         gene_data,
         spatial_locations,
@@ -207,7 +347,7 @@ def Xenium_SVI(
         neighborhood_size=2,
         neighborhood_agg="sum",
         uncertainty_values = [0.25, 0.5, 0.75, 0.9, 0.99],
-        evaluate_markers=True, 
+        evaluate_markers=False, 
         num_posterior_samples=100,
         mu_prior_scale=1.0,
         sigma_prior_scale=1.0,
@@ -247,12 +387,14 @@ def Xenium_SVI(
         elif method == "Hierarchical":
             initial_clusters = original_adata.Hierarchical(original_adata.xenium_spot_data, save_plot=True, num_clusters=K)
         elif method == "Leiden":
-            initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.75], save_plot=False, K=K)[0.75]
+            initial_clusters = original_adata.Leiden(original_adata.xenium_spot_data, resolutions=[0.35], save_plot=False, K=K)[0.35]
         elif method == "Louvain":
-            initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[1.0], save_plot=False, K=K)[1.0]
+            initial_clusters = original_adata.Louvain(original_adata.xenium_spot_data, resolutions=[0.35], save_plot=False, K=K)[0.35]
         elif method == "mclust":
             original_adata.pca(original_adata.xenium_spot_data, num_pcs)
             initial_clusters = original_adata.mclust(original_adata.xenium_spot_data, G=K, model_name = "EEE")
+        elif method == "random":
+            initial_clusters = np.random.randint(0, K, size=original_adata.xenium_spot_data.X.shape[0])
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -274,7 +416,7 @@ def Xenium_SVI(
     pyro.clear_param_store()
 
     # Clamping
-    MIN_CONCENTRATION = 0.001
+    MIN_CONCENTRATION = 0.01
 
     spatial_init_data = StandardScaler().fit_transform(gene_data)
     gene_data = StandardScaler().fit_transform(gene_data)
@@ -289,7 +431,8 @@ def Xenium_SVI(
 
     if custom_init:
 
-        initial_clusters = custom_cluster_initialization(original_adata, custom_init, K=num_clusters)
+        with plt.ioff():
+            initial_clusters = custom_cluster_initialization(original_adata, custom_init, K=num_clusters)
 
         match data_mode:
             case "PCA":
@@ -304,9 +447,9 @@ def Xenium_SVI(
 
         if not os.path.exists(kmeans_clusters_filepath := save_filepath("KMeans", "clusters")):
             os.makedirs(kmeans_clusters_filepath)
-        _ = plt.savefig(
-            f"{kmeans_clusters_filepath}/result.png"
-        )
+        # _ = plt.savefig(
+        #     f"{kmeans_clusters_filepath}/result.png"
+        # )
 
         cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
         
@@ -315,10 +458,10 @@ def Xenium_SVI(
         colors = plt.cm.get_cmap('viridis', num_clusters + 1)
         colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
-        plt.figure(figsize=(6, 6))
-        plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-        plt.title('Cluster Assignment with KMeans')
+        # plt.figure(figsize=(6, 6))
+        # plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        # plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        # plt.title('Cluster Assignment with KMeans')
 
         if dataset_name == "DLPFC":
             # Create a DataFrame for easier handling
@@ -418,16 +561,16 @@ def Xenium_SVI(
         colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
         colormap = ListedColormap(colormap_colors)
 
-        plt.figure(figsize=(6, 6))
-        plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-        plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-        plt.title('Prior Cluster Assignment with BayXenSmooth')
+        # plt.figure(figsize=(6, 6))
+        # plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+        # plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+        # plt.title('Prior Cluster Assignment with BayXenSmooth')
 
         if not os.path.exists(bayxensmooth_clusters_filepath := save_filepath("BayXenSmooth", "clusters", sample_for_assignment)):
             os.makedirs(bayxensmooth_clusters_filepath)
-        _ = plt.savefig(
-            f"{bayxensmooth_clusters_filepath}/prior_result.png"
-        )
+            # _ = plt.savefig(
+            #     f"{bayxensmooth_clusters_filepath}/prior_result.png"
+            # )
 
     NUM_PARTICLES = 25
     expected_total_param_dim = 2 # K x D
@@ -516,7 +659,7 @@ def Xenium_SVI(
 
     epoch_pbar = tqdm(range(NUM_EPOCHS))
     current_min_loss = float('inf')
-    PATIENCE = 10
+    PATIENCE = 5
     patience_counter = 0
     for epoch in epoch_pbar:
         epoch_pbar.set_description(f"Epoch {epoch}")
@@ -562,7 +705,7 @@ def Xenium_SVI(
     torch.set_default_tensor_type(torch.FloatTensor)
 
     # Grab the learned variational parameters
-    sample_for_assignment_options = [True, False]
+    sample_for_assignment_options = [False, True]
 
     for sample_for_assignment in sample_for_assignment_options:
         cluster_logits_q_mean = pyro.param("cluster_logits_q_mean")
@@ -600,10 +743,10 @@ def Xenium_SVI(
             colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
             colormap = ListedColormap(colormap_colors)
 
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
-            plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
-            plt.title('Posterior Cluster Assignment with BayXenSmooth')
+            # plt.figure(figsize=(6, 6))
+            # plt.imshow(cluster_grid.cpu(), cmap=colormap, interpolation='nearest', origin='lower')
+            # plt.colorbar(ticks=range(num_clusters + 1), label='Cluster Values')
+            # plt.title('Posterior Cluster Assignment with BayXenSmooth')
 
             match data_mode:
                 case "PCA":
@@ -630,7 +773,7 @@ def Xenium_SVI(
                 fp.write(str(torch.mean((cluster_assignments_prior == cluster_assignments_q).float()).item()))
 
             # grab the mpd distance of cluster labels
-            cluster_labels = np.unique(clusters)
+            cluster_labels = np.unique(cluster_grid)
             mpd = {}
             for label in cluster_labels:
                 current_cluster_locations = torch.stack(torch.where((cluster_grid == label)), axis=1).to(float)
@@ -706,41 +849,41 @@ def Xenium_SVI(
             colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, heatmap_bins - 1))))
             colormap = ListedColormap(colormap_colors)
 
-            plt.figure(figsize=(6, 6))
-            plt.imshow(cluster_confidences, cmap=colormap, interpolation='nearest', origin='lower')
-            # plt.xticks([])  # Remove x-axis tick marks
-            # plt.yticks([])  # Remove y-axis tick marks
-            plt.gca().spines['top'].set_visible(False)  # Remove top border
-            plt.gca().spines['right'].set_visible(False)  # Remove right border
-            # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
-            # plt.gca().spines['left'].set_visible(False)  # Remove left border
-            cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
-            plt.title(r'$P(z_i = k)$')
+            # plt.figure(figsize=(6, 6))
+            # plt.imshow(cluster_confidences, cmap=colormap, interpolation='nearest', origin='lower')
+            # # plt.xticks([])  # Remove x-axis tick marks
+            # # plt.yticks([])  # Remove y-axis tick marks
+            # plt.gca().spines['top'].set_visible(False)  # Remove top border
+            # plt.gca().spines['right'].set_visible(False)  # Remove right border
+            # # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+            # # plt.gca().spines['left'].set_visible(False)  # Remove left border
+            # cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
+            # plt.title(r'$P(z_i = k)$')
 
 
-            colors = plt.cm.get_cmap('Greys', num_clusters + 1)
-            colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
+            # colors = plt.cm.get_cmap('Greys', num_clusters + 1)
+            # colormap = ListedColormap(colors(np.linspace(0, 1, num_clusters + 1)))
 
-            confidence_proportions = {}
-            for uncertainty_value in uncertainty_values:
-                confidence_matrix = (cluster_confidences > uncertainty_value).float()
-                confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
-                plt.figure(figsize=(6, 6))
-                plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
-                # plt.xticks([])  # Remove x-axis tick marks
-                # plt.yticks([])  # Remove y-axis tick marks
-                plt.gca().spines['top'].set_visible(False)  # Remove top border
-                plt.gca().spines['right'].set_visible(False)  # Remove right border
-                # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
-                # plt.gca().spines['left'].set_visible(False)  # Remove left border
-                cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
-                # PLOT ALL UNCERTAINTY VALUESs
-                plt.title(r'$\max_k \, P(z_i = k) > $' + f'{uncertainty_value}')
-                if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
-                    os.makedirs(bayxensmooth_uncertainty_filepath)
-                _ = plt.savefig(
-                    f"{bayxensmooth_uncertainty_filepath}/CONFIDENCE={uncertainty_value}.png"
-                )
+            # confidence_proportions = {}
+            # for uncertainty_value in uncertainty_values:
+            #     confidence_matrix = (cluster_confidences > uncertainty_value).float()
+            #     confidence_proportions[uncertainty_value] = torch.mean(confidence_matrix).item()
+            #     plt.figure(figsize=(6, 6))
+            #     plt.imshow(cluster_confidences > uncertainty_value, cmap=colormap, interpolation='nearest', origin='lower')
+            #     # plt.xticks([])  # Remove x-axis tick marks
+            #     # plt.yticks([])  # Remove y-axis tick marks
+            #     plt.gca().spines['top'].set_visible(False)  # Remove top border
+            #     plt.gca().spines['right'].set_visible(False)  # Remove right border
+            #     # plt.gca().spines['bottom'].set_visible(False)  # Remove bottom border
+            #     # plt.gca().spines['left'].set_visible(False)  # Remove left border
+            #     cbar = plt.colorbar(fraction=0.046, pad=0.04)  # Make colorbar the same height as the figure
+            #     # PLOT ALL UNCERTAINTY VALUESs
+            #     plt.title(r'$\max_k \, P(z_i = k) > $' + f'{uncertainty_value}')
+            #     if not os.path.exists(bayxensmooth_uncertainty_filepath := save_filepath("BayXenSmooth", "uncertainty", sample_for_assignment)):
+            #         os.makedirs(bayxensmooth_uncertainty_filepath)
+            #     _ = plt.savefig(
+            #         f"{bayxensmooth_uncertainty_filepath}/CONFIDENCE={uncertainty_value}.png"
+            #     )
 
         else:
 
@@ -753,174 +896,196 @@ def Xenium_SVI(
 
     return cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean
 
+import torch
 
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
+def compute_agreement_confusion_matrix(true_labels, posterior_samples, spatial_locations, pairwise_method="neighbors", r=1):
+    
+    if pairwise_method == "neighbors":
+
+        pairs = []
+        for index, observation in spatial_locations.iterrows():
+            current_row = observation["row"] 
+            current_col = observation["col"]
+            neighboring_locations = spatial_locations[
+                (spatial_locations["row"] >= current_row) 
+                & (spatial_locations["row"] <= (current_row + r))
+                & (spatial_locations["col"] >= current_col)
+                & (spatial_locations["col"] <= (current_col + r))
+            ].index.astype(int)
+            pairs.extend(torch.cartesian_prod(torch.tensor([int(index)]), torch.tensor(neighboring_locations)))
+    elif pairwise_method == "random":
+        num_pairs = min(10000, len(true_labels) * (len(true_labels) - 1) // 2)
+        indices = torch.randperm(len(true_labels), device=true_labels.device)[:num_pairs]
+        pairs = torch.combinations(indices, r=2)
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        raise ValueError("Invalid pairwise method. Use 'neighbors' or 'random'.")
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run Xenium SVI_Approx with different arguments")
-    parser.add_argument("--custom_init", type=str, required=False)
-    parser.add_argument("--neighborhood_size", type=int, required=True)
-    parser.add_argument("--num_clusters", type=int, required=True)
-    parser.add_argument("--spot_size", type=int, required=True)
-    parser.add_argument("--data_mode", type=str, required=True)
-    parser.add_argument("--num_pcs", type=int, required=True)
-    parser.add_argument("--hvg_var_prop", type=float, required=True)
-    parser.add_argument("--neighborhood_agg", type=str, required=True)
-    parser.add_argument("--mu_prior_scale", type=float, required=True)
-    parser.add_argument("--sigma_prior_scale", type=float, required=True)
-    parser.add_argument("--logits_prior_scale", type=float, required=True)
-    parser.add_argument("--learn_global_variances", type=str2bool, required=True)
-    return parser.parse_args()
+    import matplotlib.pyplot as plt
+    import seaborn as sns
 
-def main():
-    args = parse_args()
-    
-    DATA_TYPE = "XENIUM"
+    TP, FP, TN, FN = 0, 0, 0, 0
 
-    if DATA_TYPE == "XENIUM":
-        # Call prepare_Xenium_data with the appropriate arguments
-        gene_data, spatial_locations, original_adata = prepare_Xenium_data(
-            dataset="hBreast", 
-            spots=True, 
-            spot_size=args.spot_size, 
-            third_dim=False, 
-            log_normalize=True, 
-            likelihood_mode=args.data_mode, 
-            num_pcs=args.num_pcs,
-            hvg_var_prop=args.hvg_var_prop,
-            min_expressions_per_spot=0
-        )
-    elif DATA_TYPE == "DLPFC":
-        gene_data, spatial_locations, original_adata = prepare_DLPFC_data(
-            section_id=151673,
-            num_pcs=args.num_pcs,
-        )
+    for i, j in pairs:
+        true_agree = (true_labels[i] == true_labels[j]).int()
+        predicted_agree = (posterior_samples[i] == posterior_samples[j]).int()
 
-    print("Data Completed")
-    
-    # Call Xenium_SVI with the appropriate arguments
+        if true_agree == 1 and predicted_agree == 1:
+            TP += 1
+        elif true_agree == 0 and predicted_agree == 1:
+            FP += 1
+        elif true_agree == 0 and predicted_agree == 0:
+            TN += 1
+        elif true_agree == 1 and predicted_agree == 0:
+            FN += 1
+
+    TP /= len(pairs)
+    FP /= len(pairs)
+    TN /= len(pairs)
+    FN /= len(pairs)
+
+    # print({'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN})
+    # confusion_matrix = [[TN, FP], [FN, TP]]
+    # plt.figure(figsize=(10, 8))
+    # sns.heatmap(confusion_matrix, annot=True, fmt="g", cmap='Blues')
+    # plt.xlabel('Agreements in Predicted Data')
+    # plt.ylabel('Agreements in Ground Truth')
+    # plt.title('Confusion Matrix')
+    # plt.show()
+
+    return {'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN}
+
+
+# %%
+spot_size=50
+data_mode="PCA"
+num_pcs=3
+hvg_var_prop=0.9
+dataset_name="SYNTHETIC"
+kmeans_init=True
+custom_init="mclust"
+spatial_init=True
+num_clusters=5
+batch_size=128
+neighborhood_size=5
+neighborhood_agg="mean"
+concentration_amplification=10.0
+# uncertainty_values = [1/num_clusters, 2/num_clusters, 3/num_clusters, 4/num_clusters, 5/num_clusters]
+uncertainty_values = [0.25, 0.5, 0.75, 0.9, 0.99]
+evaluate_markers=False
+spatial_normalize=0.00
+mu_prior_scale = 10.0
+sigma_prior_scale = 2.5
+logits_prior_scale = 10.0
+learn_global_variances = True
+
+# %%
+# from IPython.utils import io
+
+# with io.capture_output():
+N = 120
+R = 5
+for n in range(1, N + 1):
+    gene_data, spatial_locations, original_adata, prior_weights, true_means, true_covariances = prepare_synthetic_data(random_seed_weights=1, random_seed_data=n)
     cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
         gene_data, 
         spatial_locations,
         original_adata,
-        data_mode=args.data_mode,
-        num_pcs=args.num_pcs,
-        hvg_var_prop=args.hvg_var_prop, 
-        dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
-        spot_size=args.spot_size, 
-        num_clusters=args.num_clusters, 
-        batch_size= 256 * int(2 ** ((100 / args.spot_size) - 1)), 
-        custom_init=args.custom_init,
-        neighborhood_size=args.neighborhood_size,
-        neighborhood_agg=args.neighborhood_agg,
-        mu_prior_scale=args.mu_prior_scale,
-        sigma_prior_scale=args.sigma_prior_scale,
-        logits_prior_scale=args.logits_prior_scale,
-        learn_global_variances=args.learn_global_variances
+        data_mode=data_mode,
+        num_pcs=num_pcs,
+        hvg_var_prop=hvg_var_prop, 
+        dataset_name="SYNTHETIC", 
+        spot_size=spot_size, 
+        num_clusters=num_clusters, 
+        batch_size=64, 
+        custom_init=custom_init,
+        neighborhood_size=neighborhood_size,
+        neighborhood_agg=neighborhood_agg,
+        mu_prior_scale=mu_prior_scale,
+        sigma_prior_scale=sigma_prior_scale,
+        logits_prior_scale=logits_prior_scale,
+        learn_global_variances=learn_global_variances
     )
-
-    sample_for_assignment_options = [False, True]
-
-    # FIX THIS LATER
-    for sample_for_assignment in sample_for_assignment_options:
-        cluster_probs_q = torch.softmax(pyro.param("cluster_logits_q_mean"), dim=1)
-        if sample_for_assignment:
-            cluster_assignments_q = pyro.sample("cluster_probs", dist.Categorical(cluster_probs_q)) 
-        else:
-            cluster_assignments_q = cluster_probs_q.argmax(dim=1)
-
-        if DATA_TYPE == "DLPFC":
-            # Create a DataFrame for easier handling
-            data = pd.DataFrame({
-                'ClusterAssignments': cluster_assignments_q,
-                'Region': original_adata.xenium_spot_data.obs["Region"]
-            })
-
-            # Drop rows where 'Region' is NaN
-            filtered_data = data.dropna(subset=['Region'])
-
-            # Calculate ARI and NMI only for the non-NaN entries
-            ari = ARI(filtered_data['ClusterAssignments'], filtered_data['Region'])
-            nmi = NMI(filtered_data['ClusterAssignments'], filtered_data['Region'])
-            cluster_metrics = {
-                "ARI": ari,
-                "NMI": nmi
-            }
-            dataset_name="DLPFC"
-            data_file_path = f"{args.data_mode}/{args.num_pcs}"
-
-            total_file_path = (
-                f"results/{dataset_name}/{args.model}/{args.component}/{data_file_path}/"
-                f"NEIGHBORSIZE={args.neighborhood_size}/NUMCLUSTERS={args.num_clusters}"
-                f"/SAMPLEFORASSIGNMENT={sample_for_assignment}"
-                f"/SPATIALPRIORMULT=DIRECT/SPOTSIZE={args.spot_size}/AGG={args.neighborhood_agg}"
-            )
-
-            if not os.path.exists(total_file_path):
-                os.makedirs(total_file_path)
-            with open(f"{total_file_path}/cluster_metrics.json", 'w') as fp:
-                json.dump(cluster_metrics, fp)
-
-def main_test():
-    DATA_TYPE = "XENIUM"
-
-    if DATA_TYPE == "XENIUM":
-        # Call prepare_Xenium_data with the appropriate arguments
-        gene_data, spatial_locations, original_adata = prepare_Xenium_data(
-            dataset="hBreast", 
-            spots=True, 
-            spot_size=50, 
-            third_dim=False, 
-            log_normalize=True, 
-            likelihood_mode="PCA", 
-            num_pcs=10,
-            hvg_var_prop=0.9,
-            min_expressions_per_spot=0
+    conf_matrix_list = []
+    for n in range(1, N + 1):
+        gene_data, spatial_locations, original_adata, prior_weights, true_means, true_covariances = prepare_synthetic_data(random_seed_weights=1, random_seed_data=n)
+        cluster_probs_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
+            gene_data, 
+            spatial_locations,
+            original_adata,
+            data_mode=data_mode,
+            num_pcs=num_pcs,
+            hvg_var_prop=hvg_var_prop, 
+            dataset_name="SYNTHETIC", 
+            spot_size=spot_size, 
+            num_clusters=num_clusters, 
+            batch_size=64, 
+            custom_init="mclust",
+            neighborhood_size=neighborhood_size,
+            neighborhood_agg=neighborhood_agg,
+            mu_prior_scale=mu_prior_scale,
+            sigma_prior_scale=sigma_prior_scale,
+            logits_prior_scale=logits_prior_scale,
+            learn_global_variances=learn_global_variances
         )
-    elif DATA_TYPE == "DLPFC":
-        gene_data, spatial_locations, original_adata = prepare_DLPFC_data(
-            section_id=151673,
-            num_pcs=3,
-        )
+        TRUE_ASSIGNMENTS = torch.tensor(prior_weights).argmax(axis=1)
+        learned_assignments = cluster_probs_q.argmax(axis=1)
+        original_adata.xenium_spot_data.obs["true_cluster"] = TRUE_ASSIGNMENTS
+        original_adata.xenium_spot_data.obs["predicted_cluster"] = learned_assignments
+        spatial_locations = spatial_locations.astype(int)
+        conf_matrix = compute_agreement_confusion_matrix(TRUE_ASSIGNMENTS, learned_assignments, spatial_locations, pairwise_method="neighbors", r=R)
+        conf_matrix_list.append(conf_matrix)
 
-    print("Data Completed")
-    
-    # Call Xenium_SVI with the appropriate arguments
-    for num_pcs in [3, 5, 10, 15, 25]:
-        for init_method in ["K-Means", "mclust"]:
-            pyro.clear_param_store()
-            start_time = time.time()
-            cluster_concentration_params_q, cluster_means_q_mean, cluster_scales_q_mean = Xenium_SVI(
-                gene_data, 
-                spatial_locations,
-                original_adata,
-                data_mode="PCA",
-                num_pcs=num_pcs,
-                hvg_var_prop=0.9, 
-                dataset_name="hBreast" if DATA_TYPE == "XENIUM" else "DLPFC", 
-                spot_size=50, 
-                num_clusters=7, 
-                batch_size= 256 * int(2 ** ((100 / 25) - 1)), 
-                custom_init=init_method,
-                neighborhood_size=1,
-                neighborhood_agg="mean",
-                mu_prior_scale=1,
-                sigma_prior_scale=1,
-                logits_prior_scale=1,
-                learn_global_variances=True
-            )
-            end_time = time.time()
-            print(f"Time taken for Xenium_SVI with num_pcs={num_pcs} and init_method={init_method}: {end_time - start_time} seconds")
+        TP_list = [x["TP"] for x in conf_matrix_list]
+        TN_list = [x["TN"] for x in conf_matrix_list]
+        FP_list = [x["FP"] for x in conf_matrix_list]
+        FN_list = [x["FN"] for x in conf_matrix_list]
 
-            torch.cuda.empty_cache()
+        # Ensure directories exist
+        os.makedirs(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/mean", exist_ok=True)
+        os.makedirs(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/median", exist_ok=True)
+        os.makedirs(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/histogram", exist_ok=True)
 
-if __name__ == "__main__":
-    main_test()
+        if n >= 30:
+
+            print({'TP': np.mean(TP_list), 'FP': np.mean(FP_list), 'TN': np.mean(TN_list), 'FN': np.mean(FN_list)})
+            confusion_matrix = [[np.mean(TN_list), np.mean(FP_list)], [np.mean(FN_list), np.mean(TP_list)]]
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(confusion_matrix, annot=True, fmt="g", cmap='Blues')
+            plt.xlabel('Agreements in Predicted Data')
+            plt.ylabel('Agreements in Ground Truth')
+            plt.title(f'Mean Proportion Confusion Matrix (N = {N}, r = {R})')
+            plt.savefig(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/mean/N={n}_R={R}.png")
+
+            print({'TP': np.median(TP_list), 'FP': np.median(FP_list), 'TN': np.median(TN_list), 'FN': np.median(FN_list)})
+            confusion_matrix = [[np.median(TN_list), np.median(FP_list)], [np.median(FN_list), np.median(TP_list)]]
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(confusion_matrix, annot=True, fmt="g", cmap='Blues')
+            plt.xlabel('Agreements in Predicted Data')
+            plt.ylabel('Agreements in Ground Truth')
+            plt.savefig(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/median/N={n}_R={R}.png")
+
+            plt.figure(figsize=(10, 8))
+            plt.suptitle(f'Confusion Matrix Histograms: N={N}', fontsize=16)
+
+            plt.subplot(2, 2, 1)
+            plt.hist(TN_list, bins=10, alpha=0.5, color='g', label=f'TN:({np.round(np.percentile(TN_list, 2.5), 2)}, {np.round(np.percentile(TN_list, 97.5), 2)})')
+            plt.legend(loc='upper right')
+            plt.title('TN Histogram')
+
+            plt.subplot(2, 2, 2)
+            plt.hist(FP_list, bins=10, alpha=0.5, color='r', label=f'FP:({np.round(np.percentile(FP_list, 2.5), 2)}, {np.round(np.percentile(FP_list, 97.5), 2)})')
+            plt.legend(loc='upper right')
+            plt.title('FP Histogram')
+
+            plt.subplot(2, 2, 3)
+            plt.hist(FN_list, bins=10, alpha=0.5, color='y', label=f'FN:({np.round(np.percentile(FN_list, 2.5), 2)}, {np.round(np.percentile(FN_list, 97.5), 2)})')
+            plt.legend(loc='upper right')
+            plt.title('FN Histogram')
+
+            plt.subplot(2, 2, 4)
+            plt.hist(TP_list, bins=10, alpha=0.5, color='b', label=f'TP:({np.round(np.percentile(TP_list, 2.5), 2)}, {np.round(np.percentile(TP_list, 97.5), 2)})')
+            plt.legend(loc='upper right')
+            plt.title('TP Histogram')
+
+            plt.savefig(f"results/SYNTHETIC/BayXenSmooth/VSBC_CM/INIT={custom_init}/histogram/N={n}_R={R}.png")
+

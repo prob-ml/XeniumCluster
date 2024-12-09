@@ -5,9 +5,9 @@ import subprocess
 # Define your parameter grid
 parameter_grid = {
     "custom_init": ["K-Means", "Leiden"],
-    "neighborhood_size": range(1, 4),
+    "neighborhood_size": range(1, 5),
     "num_clusters": [17],
-    "spot_size": [25, 75, 100],
+    "spot_size": [75, 100],
     "num_pcs": [3, 5, 10, 15, 25],
     "data_mode": ["PCA"],
     "hvg_var_prop": [0.9],
@@ -33,7 +33,8 @@ def format_command(args):
         f"--mu_prior_scale={args['mu_prior_scale']} "
         f"--sigma_prior_scale={args['sigma_prior_scale']} "
         f"--logits_prior_scale={args['logits_prior_scale']} "
-        f"--learn_global_variances={args['learn_global_variances']}"
+        f"--learn_global_variances={args['learn_global_variances']} "
+        f"CUDA_VISIBLE_DEVICES=2,3,5,7"  # Specify the GPUs to use
     )
 
 # Generate all combinations of parameters

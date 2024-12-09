@@ -416,11 +416,11 @@ class XeniumCluster:
 
             cluster_grid = torch.zeros((num_rows, num_cols), dtype=torch.int)
 
-            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
-
             if self.dataset_name == "SYNTHETIC":
+                cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
                 colormap = plt.cm.get_cmap('viridis', num_clusters)
             else:
+                cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
                 colors = plt.cm.get_cmap('viridis', num_clusters + 1)
                 colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
                 colormap = ListedColormap(colormap_colors)
@@ -482,8 +482,10 @@ class XeniumCluster:
         cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
 
         if self.dataset_name == "SYNTHETIC":
-            colormap = plt.cm.get_cmap('viridis', num_clusters + 1)
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int)
+            colormap = plt.cm.get_cmap('viridis', num_clusters)
         else:
+            cluster_grid[rows, cols] = torch.tensor(clusters, dtype=torch.int) + 1
             colors = plt.cm.get_cmap('viridis', num_clusters + 1)
             colormap_colors = np.vstack(([[1, 1, 1, 1]], colors(np.linspace(0, 1, num_clusters))))
             colormap = ListedColormap(colormap_colors)
