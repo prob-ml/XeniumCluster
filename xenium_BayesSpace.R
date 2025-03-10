@@ -11,7 +11,7 @@ library(Matrix)
 # sce <- readVisium("data/sce")
 
 BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", num_pcs=15, K=NULL, grid_search=TRUE) {
-
+  
   rowData <- read.csv(paste0("data/BayesSpace/", dataset, "_rowData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
   colData <- read.csv(paste0("data/BayesSpace/", dataset, "_colData_SPOT_SIZE=", SPOT_SIZE, ".csv"), stringsAsFactors=FALSE, row.names=1)
   countsData <- t(read.csv(paste0("data/BayesSpace/", dataset, "_counts_SPOT_SIZE=", SPOT_SIZE, ".csv"), row.names=1, check.names=F, stringsAsFactors=FALSE))
@@ -27,7 +27,7 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
   }
   
   for (gamma in gamma_list) {
-  
+    
     is_already_log_transformed = TRUE
     if (is_already_log_transformed) {
       sce <- SingleCellExperiment(assays=list(logcounts=as(as.matrix(countsData), "dgCMatrix")),
@@ -48,10 +48,10 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
     } else {
       if (is_already_log_transformed) {
         sce <- spatialPreprocess(sce, platform="ST", 
-                                    n.PCs=num_pcs, n.HVGs=2000, log.normalize=FALSE)
+                                 n.PCs=num_pcs, n.HVGs=2000, log.normalize=FALSE)
       } else {
         sce <- spatialPreprocess(sce, platform="ST", 
-                                    n.PCs=num_pcs, n.HVGs=2000, log.normalize=TRUE) 
+                                 n.PCs=num_pcs, n.HVGs=2000, log.normalize=TRUE) 
       }
     }
     
@@ -65,19 +65,35 @@ BayesSpace <- function(dataset="hBreast", SPOT_SIZE=100, init_method="mclust", n
     }
     else
       q_optimal <- K
-
+    
+    NREP = 1000
     sce <- spatialCluster(sce, q=q_optimal, platform="ST", d=num_pcs,
-                              init.method=init_method, model="t", gamma=gamma,
-                              nrep=1000, burn.in=100,
-                              save.chain=TRUE)
+                          init.method=init_method, model="t", gamma=gamma,
+                          nrep=NREP, burn.in=100,
+                          save.chain=TRUE)
+    chain <- mcmcChain(sce)
+    final_means <- chain[(NREP-100):NREP, 26:50]
+    final_scales <- chain[(NREP-100):NREP, 1:25]
     
     dir_path <- paste0("results/", dataset, "/BayesSpace/", num_pcs, "/", q_optimal, "/clusters/", init_method, "/", SPOT_SIZE, "/", format(gamma, nsmall = 2))
     if (!dir.exists(dir_path)) {
       dir.create(dir_path, recursive = TRUE)
     }
+    
+    means_path <- paste0(dir_path, "/means")
+    if (!dir.exists(means_path)) {
+      dir.create(means_path, recursive = TRUE)
+    }
+    
+    scales_path <- paste0(dir_path, "/scales")
+    if (!dir.exists(scales_path)) {
+      dir.create(scales_path, recursive = TRUE)
+    }
     cluster_data <- data.frame(sce$spatial.cluster)
     colnames(cluster_data) <- c("BayesSpace cluster")
     write.csv(cluster_data, paste0(dir_path, "/clusters_K=", q_optimal, ".csv"), row.names = TRUE)
+    write.csv(final_means, paste0(dir_path, "/means", "/clusters_K=", q_optimal, ".csv"), row.names = TRUE)
+    write.csv(final_scales, paste0(dir_path, "/scales", "/clusters_K=", q_optimal, ".csv"), row.names = TRUE)
     
     clusterPlot(sce, palette=c("purple", "red", "blue", "yellow"), color="black") +
       theme_bw() +
